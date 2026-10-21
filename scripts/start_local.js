@@ -86,13 +86,14 @@ SERVICES.forEach(svc => {
 // Print service dashboard table
 setTimeout(() => {
   console.log(`\n${BOLD}--- ALL CONFORMANCE LABORATORY SERVICES READY ---${RESET}`);
-  console.log(`  🌐  \x1b[33mFrontend UI Dashboard:\x1b[0m     http://localhost:3000`);
-  console.log(`  🚀  \x1b[35mConformance BFF Hub:\x1b[0m       http://localhost:4000`);
-  console.log(`  📡  \x1b[35mTelemetry WebSocket:\x1b[0m       ws://localhost:4000/telemetry`);
-  console.log(`  🏛️   \x1b[36mMock Inji Certify:\x1b[0m         http://localhost:8080`);
-  console.log(`  🛡️   \x1b[32mMock Inji Verify:\x1b[0m          http://localhost:8081`);
+  console.log(`  🌐  \x1b[33mFrontend UI Dashboard:\x1b[0m     http://localhost:3000   (Interactive Web App)`);
+  console.log(`  🚀  \x1b[35mConformance BFF Hub:\x1b[0m       http://localhost:4000   (Gateway Developer Portal)`);
+  console.log(`  📡  \x1b[36mTelemetry Stream Viewer:\x1b[0m   http://localhost:4000/telemetry (In-Browser Live Monitor)`);
+  console.log(`  🔌  \x1b[36mTelemetry WS Feed:\x1b[0m         ws://localhost:4000/telemetry   (Raw WebSocket Socket)`);
+  console.log(`  🏛️   \x1b[36mMock Inji Certify:\x1b[0m         http://localhost:8080   (OpenID4VCI Issuer Portal)`);
+  console.log(`  🛡️   \x1b[32mMock Inji Verify:\x1b[0m          http://localhost:8081   (OpenID4VP Verifier Portal)`);
   console.log(`${BOLD}------------------------------------------------${RESET}`);
-  console.log(`Press Ctrl+C to terminate all services gracefully.\n`);
+  console.log(`Every port now serves an interactive web dashboard! Click any link to open in your browser.\n`);
 }, 3000);
 
 // Graceful termination

@@ -84,6 +84,192 @@ function verifyJwsFlexible(compactJws, publicJwkOverride) {
   return { header, payload };
 }
 
+// Root Landing Page & Developer Portal for Mock Inji Verify (Port 8081)
+app.get('/', (req, res) => {
+  if (req.accepts('html')) {
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock Inji Verify - OpenID4VP Verifier Portal</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1e293b;
+      --card-hover: #1f2d42;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --indigo: #6366f1;
+      --code: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      line-height: 1.6;
+      padding: 2.5rem 1.5rem;
+    }
+    .container { max-width: 1040px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.25rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.35rem 0.75rem; border-radius: 9999px;
+    }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-purple { background: rgba(99, 102, 241, 0.15); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.3); } }
+    h1 { font-size: 1.85rem; font-weight: 800; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; }
+    .action-bar { display: flex; gap: 1rem; margin-top: 1.75rem; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.75rem 1.25rem; border-radius: 10px; font-size: 0.875rem; font-weight: 600;
+      text-decoration: none; transition: all 0.2s ease; cursor: pointer; border: none;
+    }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35); }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(6, 182, 212, 0.5); }
+    .btn-secondary { background: var(--card-bg); color: var(--text); border: 1px solid var(--card-border); }
+    .btn-secondary:hover { background: var(--card-hover); border-color: var(--cyan); color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 1.25rem; transition: border-color 0.2s;
+    }
+    .card:hover { border-color: rgba(6, 182, 212, 0.4); }
+    .card-title { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .card-value { font-size: 1.25rem; font-weight: 800; color: var(--text); }
+    .section-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+    .endpoint-list { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 2rem; }
+    .endpoint-row {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 1rem 1.25rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    }
+    .endpoint-info { display: flex; align-items: center; gap: 0.85rem; }
+    .method {
+      padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 800; font-family: monospace;
+    }
+    .method-get { background: rgba(16, 185, 129, 0.2); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .method-post { background: rgba(99, 102, 241, 0.2); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .endpoint-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; font-weight: 600; color: #fff; text-decoration: none; }
+    .endpoint-path:hover { color: var(--cyan); text-decoration: underline; }
+    .endpoint-desc { color: var(--muted); font-size: 0.85rem; }
+    .services-nav { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--card-border); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-row">
+        <span class="badge badge-green"><span class="pulse-dot"></span> Verifier Operational</span>
+        <span class="badge badge-cyan">Port 8081 (Mock Verify)</span>
+        <span class="badge badge-purple">OpenID4VP Draft 21-23</span>
+      </div>
+      <h1>Mock Inji Verify Simulator</h1>
+      <p class="subtitle">Deterministic OpenID4VP Relying Party Simulator with RFC 9901 sd_hash &amp; DIF PE 2.0 multi-path validation</p>
+      <div class="action-bar">
+        <a href="http://localhost:3000" class="btn btn-primary" target="_blank">🖥️ Open Conformance UI (:3000)</a>
+        <a href="/api/v1/request" class="btn btn-secondary" target="_blank">📋 Generate Auth Request</a>
+        <a href="/health" class="btn btn-secondary" target="_blank">🩺 Health JSON</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">Verification Spec</div>
+        <div class="card-value">OpenID4VP Draft 23</div>
+      </div>
+      <div class="card">
+        <div class="card-title">sd_hash Validation</div>
+        <div class="card-value">RFC 9901 Active</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Active Sessions</div>
+        <div class="card-value">${activeSessions.size} Pending</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Skew Tolerance</div>
+        <div class="card-value">±300s (FAPI 2.0)</div>
+      </div>
+    </div>
+
+    <div class="section-title">🌐 Laboratory Microservice Topology</div>
+    <div class="services-nav">
+      <a href="http://localhost:3000" class="btn btn-secondary" target="_blank">🖥️ Frontend UI (:3000)</a>
+      <a href="http://localhost:4000" class="btn btn-secondary" target="_blank">🚀 Gateway Hub (:4000)</a>
+      <a href="http://localhost:8080" class="btn btn-secondary" target="_blank">🏛️ Inji Certify Mock (:8080)</a>
+      <a href="http://localhost:8081" class="btn btn-secondary" style="border-color: var(--cyan); color: var(--cyan);">🛡️ Inji Verify Mock (:8081)</a>
+    </div>
+
+    <div class="section-title">⚡ Available Verifier Endpoints</div>
+    <div class="endpoint-list">
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/health" class="endpoint-path" target="_blank">/health</a>
+        </div>
+        <div class="endpoint-desc">Verifier health status, capabilities and version info</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/api/v1/request" class="endpoint-path" target="_blank">/api/v1/request</a>
+        </div>
+        <div class="endpoint-desc">Generates sample OpenID4VP Authorization Request with DIF PE 2.0 Presentation Definition</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/request</span>
+        </div>
+        <div class="endpoint-desc">Parameterized Authorization Request generator supporting format selection</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/direct_post</span>
+        </div>
+        <div class="endpoint-desc">OpenID4VP direct_post submission endpoint with RFC 9901 sd_hash &amp; IEEE P1363 validation</div>
+      </div>
+    </div>
+
+    <footer>
+      MOSIP Inji Conformance Laboratory &bull; Mock Inji Verify Microservice
+    </footer>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.json({
+      service: 'Mock Inji Verify (OpenID4VP Simulator)',
+      status: 'OPERATIONAL',
+      port: PORT,
+      verifier_url: VERIFIER_URL,
+      endpoints: {
+        health: `${VERIFIER_URL}/health`,
+        auth_request: `${VERIFIER_URL}/api/v1/request`,
+        direct_post: `${VERIFIER_URL}/direct_post`
+      }
+    });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -95,9 +281,9 @@ app.get('/health', (req, res) => {
 });
 
 // Generate OpenID4VP Authorization Request (DIF PE 2.0 & DCQL metadata)
-app.post('/api/v1/request', (req, res) => {
+function generateAuthRequestHandler(req, res) {
   const nonce = crypto.randomUUID();
-  const format = req.body.format || 'vc+sd-jwt';
+  const format = (req.body && req.body.format) || (req.query && req.query.format) || 'vc+sd-jwt';
 
   const presentationDefinition = {
     id: `pd_${crypto.randomUUID()}`,
@@ -154,7 +340,10 @@ app.post('/api/v1/request', (req, res) => {
     qr_payload: `openid4vp://?request_uri=${encodeURIComponent(requestUri)}`,
     nonce: nonce
   });
-});
+}
+
+app.post('/api/v1/request', generateAuthRequestHandler);
+app.get('/api/v1/request', generateAuthRequestHandler);
 
 app.get('/requests/:nonce', (req, res) => {
   const session = activeSessions.get(req.params.nonce);
@@ -429,13 +618,51 @@ app.post('/direct_post', (req, res) => {
     });
   }
 
-  // Fallback for mDoc or unknown accepted format
   res.json({
     status: 'OK',
     verification_result: 'SUCCESS',
     format: 'mso_mdoc',
     message: 'Presentation accepted and verified'
   });
+});
+
+// Custom 404 Handler (Prevents raw "Cannot GET" errors)
+app.use((req, res) => {
+  if (req.accepts('html')) {
+    res.status(404).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>404 - Endpoint Not Found | Mock Inji Verify</title>
+  <style>
+    body { background: #090d16; color: #f8fafc; font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
+    .box { background: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 2.5rem; max-width: 600px; width: 100%; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    h1 { font-size: 3rem; color: #f43f5e; margin: 0 0 0.5rem 0; font-weight: 800; }
+    h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #f1f5f9; }
+    p { color: #94a3b8; font-size: 0.95rem; margin-bottom: 1.5rem; }
+    code { font-family: monospace; background: rgba(0,0,0,0.4); padding: 0.2rem 0.5rem; border-radius: 6px; color: #38bdf8; }
+    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+    .btn { display: inline-block; padding: 0.65rem 1.25rem; border-radius: 8px; font-weight: 600; text-decoration: none; font-size: 0.85rem; }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; }
+    .btn-secondary { background: #1f2937; color: #e2e8f0; border: 1px solid #374151; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>404</h1>
+    <h2>Endpoint Not Found on Mock Verifier</h2>
+    <p>No route matches <code>${req.method} ${req.originalUrl}</code>.</p>
+    <div class="actions">
+      <a href="/" class="btn btn-primary">🛡️ Verifier Portal (/)</a>
+      <a href="/api/v1/request" class="btn btn-secondary">📋 Auth Request</a>
+      <a href="http://localhost:3000" class="btn btn-secondary">🖥️ Conformance UI (:3000)</a>
+    </div>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.status(404).json({ error: 'not_found', method: req.method, path: req.originalUrl });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {

@@ -123,6 +123,218 @@ function verifyJwsFlexible(compactJws, publicJwkOverride) {
   return { header, payload };
 }
 
+// Root Landing Page & Developer Portal for Mock Inji Certify (Port 8080)
+app.get('/', (req, res) => {
+  if (req.accepts('html')) {
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock Inji Certify - OpenID4VCI Issuer Portal</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1e293b;
+      --card-hover: #1f2d42;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --indigo: #6366f1;
+      --code: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      line-height: 1.6;
+      padding: 2.5rem 1.5rem;
+    }
+    .container { max-width: 1040px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.25rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.35rem 0.75rem; border-radius: 9999px;
+    }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-purple { background: rgba(99, 102, 241, 0.15); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.3); } }
+    h1 { font-size: 1.85rem; font-weight: 800; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; }
+    .action-bar { display: flex; gap: 1rem; margin-top: 1.75rem; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.75rem 1.25rem; border-radius: 10px; font-size: 0.875rem; font-weight: 600;
+      text-decoration: none; transition: all 0.2s ease; cursor: pointer; border: none;
+    }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35); }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(6, 182, 212, 0.5); }
+    .btn-secondary { background: var(--card-bg); color: var(--text); border: 1px solid var(--card-border); }
+    .btn-secondary:hover { background: var(--card-hover); border-color: var(--cyan); color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 1.25rem; transition: border-color 0.2s;
+    }
+    .card:hover { border-color: rgba(6, 182, 212, 0.4); }
+    .card-title { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .card-value { font-size: 1.25rem; font-weight: 800; color: var(--text); }
+    .section-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+    .endpoint-list { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 2rem; }
+    .endpoint-row {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 1rem 1.25rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    }
+    .endpoint-info { display: flex; align-items: center; gap: 0.85rem; }
+    .method {
+      padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 800; font-family: monospace;
+    }
+    .method-get { background: rgba(16, 185, 129, 0.2); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .method-post { background: rgba(99, 102, 241, 0.2); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .endpoint-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; font-weight: 600; color: #fff; text-decoration: none; }
+    .endpoint-path:hover { color: var(--cyan); text-decoration: underline; }
+    .endpoint-desc { color: var(--muted); font-size: 0.85rem; }
+    .services-nav { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--card-border); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-row">
+        <span class="badge badge-green"><span class="pulse-dot"></span> Issuer Operational</span>
+        <span class="badge badge-cyan">Port 8080 (Mock Certify)</span>
+        <span class="badge badge-purple">OpenID4VCI Draft 13 &amp; 14</span>
+      </div>
+      <h1>Mock Inji Certify Simulator</h1>
+      <p class="subtitle">Deterministic OpenID4VCI Credential Issuer with IEEE P1363 (64-byte r||s) &amp; RFC 9449 DPoP 'ath' enforcement</p>
+      <div class="action-bar">
+        <a href="http://localhost:3000" class="btn btn-primary" target="_blank">🖥️ Open Conformance UI (:3000)</a>
+        <a href="/.well-known/openid-credential-issuer" class="btn btn-secondary" target="_blank">🔍 OpenID4VCI Discovery</a>
+        <a href="/credential-offer?uin=123456789012" class="btn btn-secondary" target="_blank">🎟️ Generate Credential Offer</a>
+        <a href="/health" class="btn btn-secondary" target="_blank">🩺 Health JSON</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">Cryptographic Key</div>
+        <div class="card-value">${issuerJwk.kid} (ES256)</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Draft Support</div>
+        <div class="card-value">Draft 13 &amp; 14 Dual</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Pre-Auth Sessions</div>
+        <div class="card-value">${validPreAuthCodes.size} Active</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Formats Supported</div>
+        <div class="card-value">SD-JWT VC / JSON-LD / mdoc</div>
+      </div>
+    </div>
+
+    <div class="section-title">🌐 Laboratory Microservice Topology</div>
+    <div class="services-nav">
+      <a href="http://localhost:3000" class="btn btn-secondary" target="_blank">🖥️ Frontend UI (:3000)</a>
+      <a href="http://localhost:4000" class="btn btn-secondary" target="_blank">🚀 Gateway Hub (:4000)</a>
+      <a href="http://localhost:8080" class="btn btn-secondary" style="border-color: var(--cyan); color: var(--cyan);">🏛️ Inji Certify Mock (:8080)</a>
+      <a href="http://localhost:8081" class="btn btn-secondary" target="_blank">🛡️ Inji Verify Mock (:8081)</a>
+    </div>
+
+    <div class="section-title">⚡ Available Issuer Endpoints</div>
+    <div class="endpoint-list">
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/.well-known/openid-credential-issuer" class="endpoint-path" target="_blank">/.well-known/openid-credential-issuer</a>
+        </div>
+        <div class="endpoint-desc">Standard OpenID4VCI Issuer Discovery metadata document</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/.well-known/oauth-authorization-server" class="endpoint-path" target="_blank">/.well-known/oauth-authorization-server</a>
+        </div>
+        <div class="endpoint-desc">OAuth 2.0 Authorization Server metadata &amp; DPoP signing algorithms</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/.well-known/jwks.json" class="endpoint-path" target="_blank">/.well-known/jwks.json</a>
+        </div>
+        <div class="endpoint-desc">Public JSON Web Key Set containing active ES256 &amp; EdDSA public keys</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/credential-offer?uin=123456789012" class="endpoint-path" target="_blank">/credential-offer?uin=123456789012</a>
+        </div>
+        <div class="endpoint-desc">Initiates Pre-Authorized Code flow with custom UIN subject</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/health" class="endpoint-path" target="_blank">/health</a>
+        </div>
+        <div class="endpoint-desc">Mock Issuer health status and uptime verification</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/token</span>
+        </div>
+        <div class="endpoint-desc">OAuth 2.0 token endpoint enforcing RFC 9449 DPoP proof validation</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/credential</span>
+        </div>
+        <div class="endpoint-desc">OpenID4VCI credential issuance endpoint with IEEE P1363 ES256 enforcement</div>
+      </div>
+    </div>
+
+    <footer>
+      MOSIP Inji Conformance Laboratory &bull; Mock Inji Certify Microservice
+    </footer>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.json({
+      service: 'Mock Inji Certify (OpenID4VCI Simulator)',
+      status: 'OPERATIONAL',
+      port: PORT,
+      issuer_url: ISSUER_URL,
+      endpoints: {
+        discovery: `${ISSUER_URL}/.well-known/openid-credential-issuer`,
+        auth_server: `${ISSUER_URL}/.well-known/oauth-authorization-server`,
+        jwks: `${ISSUER_URL}/.well-known/jwks.json`,
+        credential_offer: `${ISSUER_URL}/credential-offer?uin=123456789012`,
+        token: `${ISSUER_URL}/token`,
+        credential: `${ISSUER_URL}/credential`,
+        health: `${ISSUER_URL}/health`
+      }
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -465,6 +677,45 @@ app.post('/credential', (req, res) => {
   }
 
   res.status(400).json({ error: 'unsupported_format', error_description: `Format ${format} not supported` });
+});
+
+// Custom 404 Handler (Prevents raw "Cannot GET" errors)
+app.use((req, res) => {
+  if (req.accepts('html')) {
+    res.status(404).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>404 - Endpoint Not Found | Mock Inji Certify</title>
+  <style>
+    body { background: #090d16; color: #f8fafc; font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
+    .box { background: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 2.5rem; max-width: 600px; width: 100%; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    h1 { font-size: 3rem; color: #f43f5e; margin: 0 0 0.5rem 0; font-weight: 800; }
+    h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #f1f5f9; }
+    p { color: #94a3b8; font-size: 0.95rem; margin-bottom: 1.5rem; }
+    code { font-family: monospace; background: rgba(0,0,0,0.4); padding: 0.2rem 0.5rem; border-radius: 6px; color: #38bdf8; }
+    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+    .btn { display: inline-block; padding: 0.65rem 1.25rem; border-radius: 8px; font-weight: 600; text-decoration: none; font-size: 0.85rem; }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; }
+    .btn-secondary { background: #1f2937; color: #e2e8f0; border: 1px solid #374151; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>404</h1>
+    <h2>Endpoint Not Found on Mock Issuer</h2>
+    <p>No route matches <code>${req.method} ${req.originalUrl}</code>.</p>
+    <div class="actions">
+      <a href="/" class="btn btn-primary">🏛️ Issuer Portal (/)</a>
+      <a href="/.well-known/openid-credential-issuer" class="btn btn-secondary">🔍 Metadata</a>
+      <a href="http://localhost:3000" class="btn btn-secondary">🖥️ Conformance UI (:3000)</a>
+    </div>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.status(404).json({ error: 'not_found', method: req.method, path: req.originalUrl });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {

@@ -356,8 +356,481 @@ app.post('/api/v1/transpile', (req, res) => {
   }
 });
 
-// Health check endpoint
+// Root Landing Page & Developer Portal for Conformance Gateway (Port 4000)
+app.get('/', (req, res) => {
+  if (req.accepts('html')) {
+    let runCount = 0;
+    try {
+      const row = db.prepare('SELECT count(*) as count FROM test_runs').get();
+      runCount = row ? row.count : 0;
+    } catch (e) {
+      runCount = 0;
+    }
 
+    const heapMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    const heapTotalMb = Math.round(process.memoryUsage().heapTotal / 1024 / 1024);
+    const uptimeSec = Math.floor(process.uptime());
+
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MOSIP Inji Conformance - BFF Gateway Hub</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1e293b;
+      --card-hover: #1f2d42;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --indigo: #6366f1;
+      --amber: #f59e0b;
+      --code: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      line-height: 1.6;
+      padding: 2.5rem 1.5rem;
+    }
+    .container { max-width: 1040px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.25rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.35rem 0.75rem; border-radius: 9999px;
+    }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-purple { background: rgba(99, 102, 241, 0.15); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.3); } }
+    h1 { font-size: 1.85rem; font-weight: 800; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; }
+    .action-bar { display: flex; gap: 1rem; margin-top: 1.75rem; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.75rem 1.25rem; border-radius: 10px; font-size: 0.875rem; font-weight: 600;
+      text-decoration: none; transition: all 0.2s ease; cursor: pointer; border: none;
+    }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35); }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(6, 182, 212, 0.5); }
+    .btn-telemetry { background: linear-gradient(135deg, #10b981, #059669); color: #fff; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35); }
+    .btn-telemetry:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5); }
+    .btn-secondary { background: var(--card-bg); color: var(--text); border: 1px solid var(--card-border); }
+    .btn-secondary:hover { background: var(--card-hover); border-color: var(--cyan); color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 1.25rem; transition: border-color 0.2s;
+    }
+    .card:hover { border-color: rgba(6, 182, 212, 0.4); }
+    .card-title { font-size: 0.75rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .card-value { font-size: 1.35rem; font-weight: 800; color: var(--text); }
+    .section-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+    .endpoint-list { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 2rem; }
+    .endpoint-row {
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 1rem 1.25rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    }
+    .endpoint-info { display: flex; align-items: center; gap: 0.85rem; }
+    .method {
+      padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.7rem; font-weight: 800; font-family: monospace;
+    }
+    .method-get { background: rgba(16, 185, 129, 0.2); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .method-post { background: rgba(99, 102, 241, 0.2); color: var(--indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+    .method-ws { background: rgba(6, 182, 212, 0.2); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .endpoint-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; font-weight: 600; color: #fff; text-decoration: none; }
+    .endpoint-path:hover { color: var(--cyan); text-decoration: underline; }
+    .endpoint-desc { color: var(--muted); font-size: 0.85rem; }
+    .services-nav { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--card-border); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-row">
+        <span class="badge badge-green"><span class="pulse-dot"></span> Gateway Operational</span>
+        <span class="badge badge-cyan">Port 4000 (BFF Hub)</span>
+        <span class="badge badge-purple">RFC 7515 / 9901 / 9449 Hardened</span>
+      </div>
+      <h1>MOSIP Inji Conformance Laboratory</h1>
+      <p class="subtitle">Hardened Backend-For-Frontend (BFF) Orchestration Hub &amp; Live Telemetry Gateway</p>
+      <div class="action-bar">
+        <a href="http://localhost:3000" class="btn btn-primary" target="_blank" rel="noopener">🖥️ Open Conformance UI Dashboard (:3000)</a>
+        <a href="/telemetry" class="btn btn-telemetry">📡 Live Telemetry Monitor (In-Browser Stream)</a>
+        <a href="/api/v1/health" class="btn btn-secondary" target="_blank">🩺 Health JSON</a>
+        <a href="/api/v1/matrix" class="btn btn-secondary" target="_blank">📊 Matrix Config</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">WebSocket Clients</div>
+        <div class="card-value">${connectedClients.size} Active</div>
+      </div>
+      <div class="card">
+        <div class="card-title">SQLite Conformance Store</div>
+        <div class="card-value">${runCount} Runs Stored</div>
+      </div>
+      <div class="card">
+        <div class="card-title">V8 Heap Memory</div>
+        <div class="card-value">${heapMb} MB / ${heapTotalMb} MB</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Gateway Uptime</div>
+        <div class="card-value">${uptimeSec}s (${Math.floor(uptimeSec / 60)} min)</div>
+      </div>
+    </div>
+
+    <div class="section-title">🌐 Laboratory Microservice Topology</div>
+    <div class="services-nav">
+      <a href="http://localhost:3000" class="btn btn-secondary" target="_blank">🖥️ Frontend UI (:3000)</a>
+      <a href="http://localhost:4000" class="btn btn-secondary" style="border-color: var(--cyan); color: var(--cyan);">🚀 Gateway Hub (:4000)</a>
+      <a href="http://localhost:8080" class="btn btn-secondary" target="_blank">🏛️ Inji Certify Mock (:8080)</a>
+      <a href="http://localhost:8081" class="btn btn-secondary" target="_blank">🛡️ Inji Verify Mock (:8081)</a>
+    </div>
+
+    <div class="section-title">⚡ Available Gateway Endpoints</div>
+    <div class="endpoint-list">
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-ws">WS</span>
+          <a href="/telemetry" class="endpoint-path">/telemetry</a>
+        </div>
+        <div class="endpoint-desc">Live WebSocket Event Stream (ws://localhost:4000/telemetry or interactive HTTP viewer)</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/api/v1/health" class="endpoint-path" target="_blank">/api/v1/health</a>
+        </div>
+        <div class="endpoint-desc">System health check, microservice status &amp; memory telemetry</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/api/v1/matrix" class="endpoint-path" target="_blank">/api/v1/matrix</a>
+        </div>
+        <div class="endpoint-desc">Live Conformance Matrix permutation options &amp; 8 chaos vectors catalog</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-get">GET</span>
+          <a href="/api/v1/history" class="endpoint-path" target="_blank">/api/v1/history</a>
+        </div>
+        <div class="endpoint-desc">Historical test run audit log recorded in native node:sqlite</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/orchestrate/full-matrix</span>
+        </div>
+        <div class="endpoint-desc">Executes concurrent 8-lane Judge Conformance Matrix suite</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/orchestrate/issue</span>
+        </div>
+        <div class="endpoint-desc">Orchestrates step-by-step OpenID4VCI credential issuance with DPoP &amp; IEEE P1363</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/orchestrate/verify</span>
+        </div>
+        <div class="endpoint-desc">Orchestrates OpenID4VP presentation verification with RFC 9901 sd_hash enforcement</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/transpile</span>
+        </div>
+        <div class="endpoint-desc">Cross-Draft Transpiler (Draft 13 ⇄ Draft 14 &amp; DCQL ⇄ DIF PE 2.0)</div>
+      </div>
+      <div class="endpoint-row">
+        <div class="endpoint-info">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/api/v1/export-issue</span>
+        </div>
+        <div class="endpoint-desc">Generates upstream RFC 7807 GitHub Defect Reports for MOSIP repositories</div>
+      </div>
+    </div>
+
+    <footer>
+      MOSIP Inji Conformance Laboratory &bull; PS02 High-Complexity Zero-Trust Interoperability Suite
+    </footer>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.json({
+      service: 'MOSIP Inji Conformance BFF Gateway',
+      status: 'OPERATIONAL',
+      port: PORT,
+      dashboard: 'http://localhost:3000',
+      telemetry_ws: `ws://localhost:${PORT}/telemetry`,
+      endpoints: {
+        health: `http://localhost:${PORT}/api/v1/health`,
+        matrix: `http://localhost:${PORT}/api/v1/matrix`,
+        history: `http://localhost:${PORT}/api/v1/history`,
+        telemetry_monitor: `http://localhost:${PORT}/telemetry`
+      }
+    });
+  }
+});
+
+// Interactive In-Browser Live Telemetry Stream Viewer (Port 4000 /telemetry)
+app.get('/telemetry', (req, res) => {
+  if (req.accepts('html')) {
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MOSIP Inji Telemetry Stream Monitor</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --cyan: #06b6d4;
+      --emerald: #10b981;
+      --indigo: #6366f1;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --code: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      line-height: 1.6;
+      padding: 2rem 1.5rem;
+    }
+    .container { max-width: 1040px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.75rem 2rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.35rem 0.75rem; border-radius: 9999px;
+    }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.3); } }
+    h1 { font-size: 1.65rem; font-weight: 800; margin-bottom: 0.35rem; }
+    .subtitle { color: var(--muted); font-size: 0.9rem; }
+    .note-box {
+      background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.25);
+      border-radius: 10px; padding: 0.85rem 1.25rem; margin-top: 1rem; font-size: 0.85rem; color: #bae6fd;
+    }
+    .note-box code { font-family: monospace; background: rgba(0, 0, 0, 0.4); padding: 0.2rem 0.4rem; border-radius: 4px; color: #38bdf8; }
+    .controls { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.8rem; font-weight: 600;
+      text-decoration: none; cursor: pointer; border: 1px solid var(--card-border);
+      background: var(--card-bg); color: var(--text); transition: all 0.2s;
+    }
+    .btn:hover { background: var(--card-hover); border-color: var(--cyan); color: #fff; }
+    .btn-clear { color: var(--rose); }
+    .btn-clear:hover { border-color: var(--rose); }
+    .log-container {
+      background: var(--code); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 1.25rem; min-height: 400px; max-height: 650px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.75rem;
+    }
+    .log-card {
+      background: rgba(17, 24, 39, 0.85); border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px; padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.5rem;
+      transition: border-color 0.2s;
+    }
+    .log-card:hover { border-color: rgba(6, 182, 212, 0.35); }
+    .log-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+    .log-dir {
+      font-weight: 800; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; text-transform: uppercase;
+    }
+    .dir-inbound { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .dir-outbound { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
+    .dir-sys { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .log-endpoint { font-weight: 600; color: #f1f5f9; word-break: break-all; }
+    .log-meta { display: flex; gap: 0.75rem; align-items: center; font-size: 0.75rem; color: var(--muted); }
+    .status-badge { font-weight: 800; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.7rem; }
+    .status-200 { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .status-err { background: rgba(244, 63, 94, 0.2); color: #fb7185; }
+    .log-payload {
+      background: rgba(0, 0, 0, 0.5); padding: 0.6rem 0.85rem; border-radius: 6px;
+      overflow-x: auto; font-size: 0.75rem; color: #94a3b8; max-height: 180px;
+    }
+    .empty-state { text-align: center; color: var(--muted); padding: 4rem 1rem; }
+    footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-row">
+        <span class="badge badge-green" id="statusBadge"><span class="pulse-dot"></span> Live Connected</span>
+        <span class="badge badge-cyan">ws://localhost:4000/telemetry</span>
+      </div>
+      <h1>Live Telemetry Stream Inspector</h1>
+      <p class="subtitle">Real-time WebSocket event broadcaster capturing all Inbound/Outbound OpenID4VCI &amp; OpenID4VP hops</p>
+      <div class="note-box">
+        💡 <strong>Notice for Web Browsers:</strong> Browsers do not navigate <code>ws://</code> URLs directly in the address bar (which produces <code>ERR_UNKNOWN_URL_SCHEME</code>). This page maintains an active in-browser WebSocket connection to <code>ws://localhost:4000/telemetry</code> and displays all real-time events below. CLI clients can connect using: <code>wscat -c ws://localhost:4000/telemetry</code>
+      </div>
+    </header>
+
+    <div class="controls">
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <a href="/" class="btn">⬅️ Gateway Portal</a>
+        <a href="http://localhost:3000" class="btn" target="_blank">🖥️ Open Conformance UI (:3000)</a>
+        <button class="btn" onclick="sendTestPing()">⚡ Trigger Ping Trace</button>
+      </div>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <span id="eventCount" style="font-size: 0.8rem; color: var(--muted);">0 events captured</span>
+        <button class="btn btn-clear" onclick="clearLogs()">🗑️ Clear</button>
+      </div>
+    </div>
+
+    <div class="log-container" id="logContainer">
+      <div class="empty-state" id="emptyState">
+        Waiting for telemetry events...<br>
+        <span style="font-size: 0.75rem; color: #64748b;">Trigger handshakes or matrix runs from the UI dashboard (:3000) to view live frames here.</span>
+      </div>
+    </div>
+
+    <footer>
+      MOSIP Inji Conformance Laboratory &bull; High-Frequency Telemetry Interceptor
+    </footer>
+  </div>
+
+  <script>
+    const logContainer = document.getElementById('logContainer');
+    const emptyState = document.getElementById('emptyState');
+    const statusBadge = document.getElementById('statusBadge');
+    const eventCount = document.getElementById('eventCount');
+    let totalEvents = 0;
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = wsProtocol + '//' + window.location.host + '/telemetry';
+    let socket;
+
+    function connectWs() {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        statusBadge.innerHTML = '<span class="pulse-dot"></span> Live Connected';
+        statusBadge.className = 'badge badge-green';
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          renderEvent(data);
+        } catch (e) {
+          console.error('Failed to parse event', e);
+        }
+      };
+
+      socket.onclose = () => {
+        statusBadge.innerHTML = '⚠️ Disconnected - Reconnecting...';
+        statusBadge.className = 'badge';
+        statusBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+        statusBadge.style.color = '#f59e0b';
+        setTimeout(connectWs, 2000);
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
+    }
+
+    function renderEvent(data) {
+      if (emptyState) emptyState.style.display = 'none';
+      totalEvents++;
+      eventCount.textContent = totalEvents + ' events captured';
+
+      const card = document.createElement('div');
+      card.className = 'log-card';
+
+      const dirClass = data.direction === 'INBOUND' ? 'dir-inbound' : (data.direction === 'OUTBOUND' ? 'dir-outbound' : 'dir-sys');
+      const statusClass = (data.status >= 200 && data.status < 300) ? 'status-200' : 'status-err';
+
+      card.innerHTML = \`
+        <div class="log-header">
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+            <span class="log-dir \${dirClass}">\${data.direction || data.type || 'SYSTEM'}</span>
+            <span class="log-endpoint">\${data.hopName || data.endpoint || data.message || 'Telemetry Event'}</span>
+          </div>
+          <div class="log-meta">
+            \${data.status ? \`<span class="status-badge \${statusClass}">HTTP \${data.status}</span>\` : ''}
+            \${data.latencyMs !== undefined ? \`<span>⏱️ \${data.latencyMs}ms</span>\` : ''}
+            <span>\${new Date(data.timestamp || Date.now()).toLocaleTimeString()}</span>
+          </div>
+        </div>
+        \${data.payload ? \`<pre class="log-payload">\${JSON.stringify(data.payload, null, 2)}</pre>\` : ''}
+      \`;
+
+      logContainer.insertBefore(card, logContainer.firstChild);
+    }
+
+    function clearLogs() {
+      logContainer.innerHTML = '';
+      totalEvents = 0;
+      eventCount.textContent = '0 events captured';
+    }
+
+    async function sendTestPing() {
+      try {
+        await fetch('/api/v1/health');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    connectWs();
+  </script>
+</body>
+</html>`);
+  } else {
+    res.json({
+      service: 'MOSIP Telemetry Hub',
+      protocol: 'WebSocket',
+      ws_url: `ws://localhost:${PORT}/telemetry`,
+      active_clients: connectedClients.size
+    });
+  }
+});
+
+// Health check endpoint
 app.get('/api/v1/health', async (req, res) => {
   res.json({
     status: 'UP',
@@ -1041,6 +1514,44 @@ ${JSON.stringify(traceBlob || { timestamp: new Date().toISOString(), error, modu
   res.json({ markdown: issueMarkdown });
 });
 
+// Custom 404 Handler (Prevents raw "Cannot GET" errors)
+app.use((req, res) => {
+  if (req.accepts('html')) {
+    res.status(404).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>404 - Endpoint Not Found | MOSIP Conformance Gateway</title>
+  <style>
+    body { background: #090d16; color: #f8fafc; font-family: -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; box-sizing: border-box; }
+    .box { background: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 2.5rem; max-width: 600px; width: 100%; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    h1 { font-size: 3rem; color: #f43f5e; margin: 0 0 0.5rem 0; font-weight: 800; }
+    h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #f1f5f9; }
+    p { color: #94a3b8; font-size: 0.95rem; margin-bottom: 1.5rem; }
+    code { font-family: monospace; background: rgba(0,0,0,0.4); padding: 0.2rem 0.5rem; border-radius: 6px; color: #38bdf8; }
+    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+    .btn { display: inline-block; padding: 0.65rem 1.25rem; border-radius: 8px; font-weight: 600; text-decoration: none; font-size: 0.85rem; }
+    .btn-primary { background: linear-gradient(135deg, #06b6d4, #2563eb); color: #fff; }
+    .btn-secondary { background: #1f2937; color: #e2e8f0; border: 1px solid #374151; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>404</h1>
+    <h2>Endpoint Not Found on Gateway</h2>
+    <p>No route matches <code>${req.method} ${req.originalUrl}</code>.</p>
+    <div class="actions">
+      <a href="/" class="btn btn-primary">🚀 Gateway Portal (/)</a>
+      <a href="http://localhost:3000" class="btn btn-secondary">🖥️ Frontend Dashboard (:3000)</a>
+      <a href="/telemetry" class="btn btn-secondary">📡 Live Telemetry</a>
+    </div>
+  </div>
+</body>
+</html>`);
+  } else {
+    res.status(404).json({ error: 'not_found', method: req.method, path: req.originalUrl });
+  }
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[BFF] Hardened Inji Conformance Laboratory BFF running on port ${PORT}`);
