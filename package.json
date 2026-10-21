@@ -5,6 +5,9 @@
   "private": true,
   "scripts": {
     "test:interop": "bash scripts/cli_interop_runner.sh",
+    "test:e2e": "node scripts/test_e2e_local.js",
+    "start:local": "node scripts/start_local.js",
+    "dev": "node scripts/start_local.js",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down",
     "package": "powershell -ExecutionPolicy Bypass -File .\\package_project.ps1"
