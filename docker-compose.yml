@@ -12,10 +12,12 @@ services:
       - "3000:3000"
     networks:
       - inji-net
+    mem_limit: 240m
+    memswap_limit: 240m
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 240M
 
   inji-lab-bff:
     image: node:20-alpine
@@ -27,7 +29,7 @@ services:
       - NODE_ENV=production
       - MOCK_CERTIFY_URL=http://mock-certify:8080
       - MOCK_VERIFY_URL=http://mock-verify:8081
-      - NODE_OPTIONS=--max-old-space-size=384 --optimize_for_size --max-semi-space-size=16
+      - NODE_OPTIONS=--max-old-space-size=224 --optimize_for_size --max-semi-space-size=16
     command: node backend/server.js
     ports:
       - "4000:4000"
@@ -37,10 +39,12 @@ services:
       retries: 3
     networks:
       - inji-net
+    mem_limit: 280m
+    memswap_limit: 280m
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 280M
 
   mock-certify:
     image: node:20-alpine
@@ -50,16 +54,18 @@ services:
     environment:
       - PORT=8080
       - ISSUER_URL=http://mock-certify:8080
-      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
+      - NODE_OPTIONS=--max-old-space-size=160 --optimize_for_size --max-semi-space-size=8
     command: node mocks/issuer/server.js
     ports:
       - "8080:8080"
     networks:
       - inji-net
+    mem_limit: 200m
+    memswap_limit: 200m
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 200M
 
   mock-verify:
     image: node:20-alpine
@@ -69,16 +75,18 @@ services:
     environment:
       - PORT=8081
       - VERIFIER_URL=http://mock-verify:8081
-      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
+      - NODE_OPTIONS=--max-old-space-size=160 --optimize_for_size --max-semi-space-size=8
     command: node mocks/verifier/server.js
     ports:
       - "8081:8081"
     networks:
       - inji-net
+    mem_limit: 200m
+    memswap_limit: 200m
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 200M
 
 networks:
   inji-net:

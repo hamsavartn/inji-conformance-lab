@@ -1,25 +1,92 @@
 {
   "vectors": [
     {
-      "id": "tamper_sig_flip",
-      "name": "Signature Canonicalization Flip",
-      "mutation_target": "$.proof.proofValue",
-      "mutation_action": "replace_last_char_with_Z",
-      "expected_verifier_status": 400
+      "id": "VEC-01",
+      "name": "Invalidate Issuer Signature Bit-Flip",
+      "category": "Cryptographic Integrity",
+      "rfc_reference": "RFC 7515 / RFC 9901 §4.1",
+      "mutation_target": "ISSUER_JWT_SIGNATURE",
+      "mutation_action": "flip_last_signature_byte",
+      "expected_verifier_status": 400,
+      "expected_error_code": "INVALID_ISSUER_SIGNATURE",
+      "description": "Flips the final character in base64url JWS signature segment to verify cryptographic rejection."
     },
     {
-      "id": "tamper_sd_jwt_disclosure_strip",
-      "name": "Strip Disclosures from SD-JWT",
-      "mutation_target": "SD_JWT_SPLIT",
-      "mutation_action": "truncate_at_first_tilde",
-      "expected_verifier_status": 400
-    },
-    {
-      "id": "tamper_kb_jwt_nonce",
-      "name": "Invalidate Key Binding Nonce",
+      "id": "VEC-02",
+      "name": "Key Binding Nonce Mismatch Injection",
+      "category": "Key Binding Verification",
+      "rfc_reference": "RFC 9901 §4.3",
       "mutation_target": "KB_JWT_PAYLOAD_NONCE",
-      "mutation_action": "append_invalid_string",
-      "expected_verifier_status": 400
+      "mutation_action": "replace_with_spoofed_nonce",
+      "expected_verifier_status": 400,
+      "expected_error_code": "NONCE_MISMATCH",
+      "description": "Replaces the verifier's challenge nonce in the KB-JWT payload with a mismatched random UUID."
+    },
+    {
+      "id": "VEC-03",
+      "name": "Strip Disclosure Without Updating sd_hash",
+      "category": "Selective Disclosure & sd_hash Binding",
+      "rfc_reference": "RFC 9901 §4.3.1",
+      "mutation_target": "SD_JWT_DISCLOSURE_STRIP",
+      "mutation_action": "remove_first_disclosure_segment",
+      "expected_verifier_status": 400,
+      "expected_error_code": "SD_HASH_MISMATCH",
+      "description": "Removes a disclosure segment from the SD-JWT stream while keeping KB-JWT intact, testing sd_hash tamper detection."
+    },
+    {
+      "id": "VEC-04",
+      "name": "Presentation Replay Attack (Consumed JTI)",
+      "category": "Anti-Replay Protection",
+      "rfc_reference": "OpenID4VP Draft 20 §6.2",
+      "mutation_target": "KB_JWT_JTI_REPLAY",
+      "mutation_action": "resubmit_consumed_presentation",
+      "expected_verifier_status": 400,
+      "expected_error_code": "JTI_ALREADY_CONSUMED",
+      "description": "Resubmits an identical presentation with a previously consumed JTI to test nonce/JTI replay cache."
+    },
+    {
+      "id": "VEC-05",
+      "name": "Expired Credential Presentation Injection",
+      "category": "Temporal Validity",
+      "rfc_reference": "RFC 7519 §4.1.4",
+      "mutation_target": "ISSUER_JWT_EXP_TIMESTAMP",
+      "mutation_action": "inject_past_exp_timestamp",
+      "expected_verifier_status": 400,
+      "expected_error_code": "CREDENTIAL_EXPIRED",
+      "description": "Injects an expiration timestamp from 24 hours in the past into the credential payload."
+    },
+    {
+      "id": "VEC-06",
+      "name": "Malformed Recursive SD Nesting Injection",
+      "category": "Parser Security & Nested Integrity",
+      "rfc_reference": "RFC 9901 §5.2.3",
+      "mutation_target": "SD_JWT_RECURSIVE_DIGEST",
+      "mutation_action": "inject_broken_nested_disclosure",
+      "expected_verifier_status": 400,
+      "expected_error_code": "MALFORMED_RECURSIVE_SD",
+      "description": "Injects a malformed recursive _sd structure missing matching salt/hash disclosures."
+    },
+    {
+      "id": "VEC-07",
+      "name": "INJIVER-1131 Credential Type Mismatch Injection",
+      "category": "Upstream MOSIP Defect Emulation",
+      "rfc_reference": "MOSIP INJIVER-1131 / OpenID4VP §5.1",
+      "mutation_target": "PRESENTATION_CREDENTIAL_TYPE",
+      "mutation_action": "substitute_unrequested_vct",
+      "expected_verifier_status": 400,
+      "expected_error_code": "CREDENTIAL_TYPE_MISMATCH",
+      "description": "Submits an SD-JWT with an unrequested credential type (e.g. driving_licence instead of national_id) to verify RP-side type validation."
+    },
+    {
+      "id": "VEC-08",
+      "name": "ASN.1 DER Signature Transcoding Attack",
+      "category": "Cryptographic Encoding Conformance",
+      "rfc_reference": "RFC 7515 §A.3 / Nimbus JOSE DS-01",
+      "mutation_target": "JWS_SIGNATURE_ENCODING",
+      "mutation_action": "transcode_p1363_to_asn1_der",
+      "expected_verifier_status": 400,
+      "expected_error_code": "INVALID_SIGNATURE_ENCODING",
+      "description": "Transcodes standard 64-byte IEEE P1363 signature into variable-length ASN.1 DER to verify Nimbus JOSE format enforcement."
     }
   ]
 }
