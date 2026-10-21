@@ -8,7 +8,7 @@
  * 4. Inji Conformance Web UI (port 3000)
  */
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -52,6 +52,25 @@ console.log(`${BOLD}============================================================
 console.log(`${BOLD}  MOSIP INJI CONFORMANCE LABORATORY - LOCAL ENVIRONMENT STARTER  ${RESET}`);
 console.log(`${BOLD}  Starting all 4 microservices concurrently (Zero Docker required) ${RESET}`);
 console.log(`${BOLD}================================================================${RESET}\n`);
+
+// Pre-flight: automatically free ports 3000, 4000, 8080, 8081 if occupied by lingering processes
+const PORTS_TO_CLEAN = [3000, 4000, 8080, 8081];
+if (process.platform === 'win32') {
+  PORTS_TO_CLEAN.forEach(port => {
+    try {
+      const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      out.trim().split('\n').forEach(line => {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && pid !== '0' && pid !== String(process.pid)) {
+          try { execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' }); } catch (e) {}
+        }
+      });
+    } catch (e) {
+      // Port already free
+    }
+  });
+}
 
 const spawnedChildren = [];
 
