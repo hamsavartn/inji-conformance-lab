@@ -38,10 +38,11 @@ const SERVICES = [
   {
     name: 'FRONTEND-UI ',
     color: '\x1b[33m', // Yellow
-    cmd: process.platform === 'win32' ? 'npm.cmd' : 'npm',
-    args: ['--prefix', path.join(ROOT_DIR, 'frontend'), 'run', 'dev', '--', '--port', '3000', '--host'],
-    cwd: ROOT_DIR
+    cmd: process.execPath,
+    args: [path.join(ROOT_DIR, 'frontend/node_modules/vite/bin/vite.js'), '--port', '3000', '--host'],
+    cwd: path.join(ROOT_DIR, 'frontend')
   }
+
 ];
 
 const RESET = '\x1b[0m';
