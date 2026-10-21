@@ -1,0 +1,63 @@
+version: '3.8'
+services:
+  inji-lab-ui:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
+    command: npm run dev -- --host
+    ports:
+      - "3000:3000"
+    networks:
+      - inji-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  inji-lab-bff:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=384 --optimize_for_size --max-semi-space-size=16
+    command: node backend/server.js
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/v1/health"]
+      interval: 10s
+      retries: 3
+    networks:
+      - inji-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  mock-certify:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=8080
+      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
+    command: node mocks/issuer/server.js
+    ports:
+      - "8080:8080"
+    networks:
+      - inji-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  inji-net:
+    driver: bridge

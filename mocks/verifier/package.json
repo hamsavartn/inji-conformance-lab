@@ -1,0 +1,11 @@
+{
+  "name": "mock-inji-verify",
+  "version": "1.0.0",
+  "description": "Deterministic OpenID4VP Draft 21-23 Mock Verifier & DIF PE 2.0 Engine for MOSIP Conformance Testing",
+  "main": "server.js",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "jose": "^5.9.6"
+  }
+}

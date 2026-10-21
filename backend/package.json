@@ -1,0 +1,18 @@
+{
+  "name": "inji-conformance-bff",
+  "version": "1.0.0",
+  "description": "Orchestration, WebSocket Telemetry, and Chaos Fuzzing Proxy for MOSIP Inji Interoperability Conformance",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cbor-x": "^1.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "jose": "^5.9.6",
+    "ws": "^8.18.0"
+  }
+}

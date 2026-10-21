@@ -1,0 +1,23 @@
+{
+  "name": "mosip-inji-conformance-lab",
+  "version": "1.0.0",
+  "description": "Zero-Trust Conformance & Interoperability Laboratory for MOSIP Inji (OpenID4VCI Draft 13, OpenID4VP Draft 21-23, SD-JWT VC, W3C VC, ISO 18013-5)",
+  "private": true,
+  "scripts": {
+    "test:interop": "bash scripts/cli_interop_runner.sh",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down",
+    "package": "powershell -ExecutionPolicy Bypass -File .\\package_project.ps1"
+  },
+  "keywords": [
+    "mosip",
+    "inji",
+    "openid4vci",
+    "openid4vp",
+    "verifiable-credentials",
+    "sd-jwt",
+    "conformance-lab"
+  ],
+  "author": "MOSIP Decode 2026 Team",
+  "license": "Apache-2.0"
+}

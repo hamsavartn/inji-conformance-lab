@@ -1,0 +1,25 @@
+{
+  "vectors": [
+    {
+      "id": "tamper_sig_flip",
+      "name": "Signature Canonicalization Flip",
+      "mutation_target": "$.proof.proofValue",
+      "mutation_action": "replace_last_char_with_Z",
+      "expected_verifier_status": 400
+    },
+    {
+      "id": "tamper_sd_jwt_disclosure_strip",
+      "name": "Strip Disclosures from SD-JWT",
+      "mutation_target": "SD_JWT_SPLIT",
+      "mutation_action": "truncate_at_first_tilde",
+      "expected_verifier_status": 400
+    },
+    {
+      "id": "tamper_kb_jwt_nonce",
+      "name": "Invalidate Key Binding Nonce",
+      "mutation_target": "KB_JWT_PAYLOAD_NONCE",
+      "mutation_action": "append_invalid_string",
+      "expected_verifier_status": 400
+    }
+  ]
+}

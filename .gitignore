@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.gemini/
+.qodo/
+*.docx
+mosip_inji_conformance_lab.zip

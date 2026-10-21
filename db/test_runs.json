@@ -1,0 +1,134 @@
+[
+  {
+    "id": "3a3a3452-20fc-4293-ab24-3077f8453849",
+    "timestamp": "2026-10-21T13:03:18.092Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "REJECTED_invalid_presentation",
+    "latency_ms": 34,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"error\":\"invalid_presentation\",\"error_description\":\"Required selective disclosures missing or stripped from presentation\"}"
+  },
+  {
+    "id": "8f00da83-ed69-41ab-921e-53b40c8b99f1",
+    "timestamp": "2026-10-21T13:03:18.045Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 51,
+    "tamper_applied": "STRIP_DISCLOSURES",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  },
+  {
+    "id": "a33fa590-8db5-46e6-a72e-7f850853fce7",
+    "timestamp": "2026-10-21T13:03:17.980Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "REJECTED_invalid_signature",
+    "latency_ms": 33,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"error\":\"invalid_signature\",\"error_description\":\"Cryptographic signature validation failed on Issuer JWT\"}"
+  },
+  {
+    "id": "be32d11d-b132-4ee7-a165-e1b149d036c3",
+    "timestamp": "2026-10-21T13:03:17.932Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 48,
+    "tamper_applied": "CORRUPT_SIGNATURE",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  },
+  {
+    "id": "0d9ad8f4-643f-4014-84f0-7e887469fd3b",
+    "timestamp": "2026-10-21T13:03:17.868Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "VERIFIED_PASS",
+    "latency_ms": 35,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"status\":\"OK\",\"verification_result\":\"SUCCESS\",\"format\":\"vc+sd-jwt\",\"vct\":\"urn:mosip:id:national-id\",\"issuer\":\"http://localhost:8080\",\"subject\":\"did:jwk:holder-key-1\",\"disclosed_claims\":{\"UIN\":\"123456789012\",\"fullName\":\"Aarav Kumar\",\"gender\":\"Male\",\"dob\":\"1995-08-15\"}}"
+  },
+  {
+    "id": "dab91612-9036-416f-8eea-cea9ec3fc6f7",
+    "timestamp": "2026-10-21T13:03:17.825Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 50,
+    "tamper_applied": "NONE",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  },
+  {
+    "id": "7a475ddb-72a5-4da6-80a0-6045d14f6f92",
+    "timestamp": "2026-10-21T13:02:13.779Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "VERIFIED_PASS",
+    "latency_ms": 31,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"status\":\"OK\",\"verification_result\":\"SUCCESS\",\"format\":\"vc+sd-jwt\",\"vct\":\"urn:mosip:id:national-id\",\"issuer\":\"http://localhost:8080\",\"subject\":\"did:jwk:holder-key-1\",\"disclosed_claims\":{}}"
+  },
+  {
+    "id": "e146108a-f89b-40e8-9ab2-94e902a06eed",
+    "timestamp": "2026-10-21T13:02:13.732Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 63,
+    "tamper_applied": "STRIP_DISCLOSURES",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  },
+  {
+    "id": "cc0c69f4-618d-4b3c-8365-c42fedbeb1ba",
+    "timestamp": "2026-10-21T13:02:13.656Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "VERIFIED_PASS",
+    "latency_ms": 15,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"status\":\"OK\",\"verification_result\":\"SUCCESS\",\"format\":\"vc+sd-jwt\",\"vct\":\"urn:mosip:id:national-id\",\"issuer\":\"http://localhost:8080\",\"subject\":\"did:jwk:holder-key-1\",\"disclosed_claims\":{\"UIN\":\"123456789012\",\"fullName\":\"Aarav Kumar\",\"gender\":\"Male\",\"dob\":\"1995-08-15\"}}"
+  },
+  {
+    "id": "484ca21a-7a47-40b5-ae8f-e72b51fe55e9",
+    "timestamp": "2026-10-21T13:02:13.626Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 49,
+    "tamper_applied": "CORRUPT_SIGNATURE",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  },
+  {
+    "id": "321b21cb-2491-479e-95e1-f9962567f94a",
+    "timestamp": "2026-10-21T13:02:13.556Z",
+    "issuer_type": "N/A",
+    "verifier_type": "mock-vp",
+    "format": "vc+sd-jwt",
+    "status": "VERIFIED_PASS",
+    "latency_ms": 40,
+    "tamper_applied": "NONE",
+    "trace_blob": "{\"status\":\"OK\",\"verification_result\":\"SUCCESS\",\"format\":\"vc+sd-jwt\",\"vct\":\"urn:mosip:id:national-id\",\"issuer\":\"http://localhost:8080\",\"subject\":\"did:jwk:holder-key-1\",\"disclosed_claims\":{\"UIN\":\"123456789012\",\"fullName\":\"Aarav Kumar\",\"gender\":\"Male\",\"dob\":\"1995-08-15\"}}"
+  },
+  {
+    "id": "25df5cea-4134-41a2-91b5-89ae4f145ab2",
+    "timestamp": "2026-10-21T13:02:13.500Z",
+    "issuer_type": "mock-vci",
+    "verifier_type": "N/A",
+    "format": "vc+sd-jwt",
+    "status": "ISSUED",
+    "latency_ms": 60,
+    "tamper_applied": "NONE",
+    "credential_preview": "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0Ojg..."
+  }
+]

@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+  title: Inji Interop Laboratory BFF API
+  version: 1.0.0
+  description: Central Orchestration and Fuzzing Proxy for MOSIP Inji Protocol Testing.
+servers:
+  - url: http://localhost:4000/api/v1
+paths:
+  /orchestrate/issue:
+    post:
+      summary: Trigger an automated OpenID4VCI issuance flow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                issuerType:
+                  type: string
+                  enum: [inji-certify, mock-vci, external]
+                credentialFormat:
+                  type: string
+                  enum: [vc+sd-jwt, ldp_vc, mso_mdoc]
+                tamperConfig:
+                  type: object
+                  properties:
+                    corruptSignature:
+                      type: boolean
+      responses:
+        '200':
+          description: Lifecycle flow initiated.
+  /orchestrate/verify:
+    post:
+      summary: Trigger an OpenID4VP direct_post presentation flow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                verifierType:
+                  type: string
+                  enum: [inji-verify, mock-vp]
+      responses:
+        '200':
+          description: Verification cycle complete.

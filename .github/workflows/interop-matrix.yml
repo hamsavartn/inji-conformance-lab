@@ -1,0 +1,17 @@
+name: Inji Interop Lab CI
+on:
+  push:
+    branches: [ main ]
+jobs:
+  run-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Start Docker Compose
+        run: docker compose up -d
+      - name: Wait for Healthchecks
+        run: sleep 15
+      - name: Execute Runner
+        run: bash scripts/cli_interop_runner.sh
+      - name: Post Job Summary
+        run: cat INTEROP_MATRIX.md >> $GITHUB_STEP_SUMMARY
