@@ -29,6 +29,9 @@ interface MatrixResult {
   error?: string;
 }
 
+const API_BASE = typeof window !== 'undefined' && window.location.hostname ? `http://${window.location.hostname}:4000` : 'http://localhost:4000';
+const WS_BASE = typeof window !== 'undefined' && window.location.hostname ? `ws://${window.location.hostname}:4000` : 'ws://localhost:4000';
+
 export default function App() {
   // Matrix Topology Selection
   const [selectedIssuer, setSelectedIssuer] = useState('mock-vci');
@@ -79,7 +82,7 @@ export default function App() {
   useEffect(() => {
     let ws: WebSocket;
     function connect() {
-      ws = new WebSocket('ws://localhost:4000/telemetry');
+      ws = new WebSocket(`${WS_BASE}/telemetry`);
       ws.onopen = () => setWsConnected(true);
       ws.onclose = () => {
         setWsConnected(false);
@@ -154,7 +157,7 @@ sequenceDiagram
 
     try {
       // Step 1: Issue
-      const issueRes = await fetch('http://localhost:4000/api/v1/orchestrate/issue', {
+      const issueRes = await fetch(`${API_BASE}/api/v1/orchestrate/issue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -167,7 +170,7 @@ sequenceDiagram
       setIssuedCredential(issueRes.credential);
 
       // Step 2: Verify
-      const verifyRes = await fetch('http://localhost:4000/api/v1/orchestrate/verify', {
+      const verifyRes = await fetch(`${API_BASE}/api/v1/orchestrate/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -195,7 +198,7 @@ sequenceDiagram
   async function handleRunJudgeMatrix() {
     setIsRunning(true);
     try {
-      const res = await fetch('http://localhost:4000/api/v1/orchestrate/full-matrix', {
+      const res = await fetch(`${API_BASE}/api/v1/orchestrate/full-matrix`, {
         method: 'POST'
       }).then(r => r.json());
 
@@ -215,7 +218,7 @@ sequenceDiagram
 
   // Export 1-Click GitHub Issue
   async function handleExportIssue() {
-    const res = await fetch('http://localhost:4000/api/v1/export-issue', {
+    const res = await fetch(`${API_BASE}/api/v1/export-issue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

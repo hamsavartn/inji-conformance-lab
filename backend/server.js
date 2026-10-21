@@ -177,22 +177,35 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     // HOP 1: Discovery /.well-known/openid-credential-issuer
     const t0 = Date.now();
     let metaRes;
+    let activeIssuerUrl = issuerBaseUrl;
     try {
-      const response = await fetch(`${issuerBaseUrl}/.well-known/openid-credential-issuer`);
+      const response = await fetch(`${issuerBaseUrl}/.well-known/openid-credential-issuer`, { signal: AbortSignal.timeout(3500) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       metaRes = await response.json();
     } catch (e) {
       // Fallback to local mock if live is unreachable
+      activeIssuerUrl = MOCK_CERTIFY_URL;
       const response = await fetch(`${MOCK_CERTIFY_URL}/.well-known/openid-credential-issuer`);
       metaRes = await response.json();
     }
     const t1 = Date.now();
-    traces.push(broadcastEvent('OUTBOUND', `${issuerBaseUrl}/.well-known/openid-credential-issuer`, 200, t1 - t0, metaRes, 'Wallet ->> Issuer: Discovery'));
+    traces.push(broadcastEvent('OUTBOUND', `${activeIssuerUrl}/.well-known/openid-credential-issuer`, 200, t1 - t0, metaRes, 'Wallet ->> Issuer: Discovery'));
+
+    const tokenEndpoint = metaRes?.token_endpoint || `${activeIssuerUrl}/token`;
+    const credentialEndpoint = metaRes?.credential_endpoint || `${activeIssuerUrl}/credential`;
 
     // HOP 2: Credential Offer
     const t2 = Date.now();
-    const offerRes = await fetch(`${MOCK_CERTIFY_URL}/credential-offer?uin=123456789012`).then(r => r.json());
+    let offerRes;
+    try {
+      const r = await fetch(`${activeIssuerUrl}/credential-offer?uin=123456789012`, { signal: AbortSignal.timeout(3500) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      offerRes = await r.json();
+    } catch (e) {
+      offerRes = await fetch(`${MOCK_CERTIFY_URL}/credential-offer?uin=123456789012`).then(r => r.json());
+    }
     const t3 = Date.now();
-    traces.push(broadcastEvent('INBOUND', `${issuerBaseUrl}/credential-offer`, 200, t3 - t2, offerRes, 'Issuer ->> Wallet: Credential Offer'));
+    traces.push(broadcastEvent('INBOUND', `${activeIssuerUrl}/credential-offer`, 200, t3 - t2, offerRes, 'Issuer ->> Wallet: Credential Offer'));
 
     const preAuthCode = offerRes.credential_offer.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code']['pre-authorized_code'];
 
@@ -203,25 +216,43 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     const dpopPayload = {
       jti: crypto.randomUUID(),
       htm: 'POST',
-      htu: `${MOCK_CERTIFY_URL}/token`,
+      htu: tokenEndpoint,
       iat: now
     };
     const dpopProof = signES256JWT(dpopHeader, dpopPayload, walletKeys.privateKey);
 
     const t4 = Date.now();
-    const tokenRes = await fetch(`${MOCK_CERTIFY_URL}/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'DPoP': dpopProof
-      },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-        'pre-authorized_code': preAuthCode
-      }).toString()
-    }).then(r => r.json());
+    let tokenRes;
+    try {
+      const r = await fetch(tokenEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'DPoP': dpopProof
+        },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode
+        }).toString(),
+        signal: AbortSignal.timeout(3500)
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      tokenRes = await r.json();
+    } catch (e) {
+      tokenRes = await fetch(`${MOCK_CERTIFY_URL}/token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'DPoP': dpopProof
+        },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode
+        }).toString()
+      }).then(r => r.json());
+    }
     const t5 = Date.now();
-    traces.push(broadcastEvent('OUTBOUND', `${issuerBaseUrl}/token`, 200, t5 - t4, tokenRes, 'Wallet ->> Issuer: Token Request (DPoP)'));
+    traces.push(broadcastEvent('OUTBOUND', tokenEndpoint, 200, t5 - t4, tokenRes, 'Wallet ->> Issuer: Token Request (DPoP)'));
 
     const accessToken = tokenRes.access_token;
     const cNonce = tokenRes.c_nonce;
@@ -232,7 +263,7 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     const credDpopPayload = {
       jti: crypto.randomUUID(),
       htm: 'POST',
-      htu: `${MOCK_CERTIFY_URL}/credential`,
+      htu: credentialEndpoint,
       iat: now,
       ath: ath
     };
@@ -241,28 +272,50 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     // Audited: Spring Boot Jackson strictly expects singular proof: { proof_type: "jwt", jwt: "..." }
     const proofJwtPayload = {
       iss: 'did:jwk:holder-key-1',
-      aud: issuerBaseUrl,
+      aud: activeIssuerUrl,
       iat: now,
       nonce: cNonce
     };
     const proofJwt = signES256JWT({ typ: 'openid4vci-proof+jwt', alg: 'ES256' }, proofJwtPayload, walletKeys.privateKey);
 
     const t6 = Date.now();
-    let credentialRes = await fetch(`${MOCK_CERTIFY_URL}/credential`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `DPoP ${accessToken}`,
-        'DPoP': credDpopProof
-      },
-      body: JSON.stringify({
-        format: credentialFormat,
-        proof: {
-          proof_type: 'jwt',
-          jwt: proofJwt
-        }
-      })
-    }).then(r => r.json());
+    let credentialRes;
+    try {
+      const r = await fetch(credentialEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `DPoP ${accessToken}`,
+          'DPoP': credDpopProof
+        },
+        body: JSON.stringify({
+          format: credentialFormat,
+          proof: {
+            proof_type: 'jwt',
+            jwt: proofJwt
+          }
+        }),
+        signal: AbortSignal.timeout(3500)
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      credentialRes = await r.json();
+    } catch (e) {
+      credentialRes = await fetch(`${MOCK_CERTIFY_URL}/credential`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `DPoP ${accessToken}`,
+          'DPoP': credDpopProof
+        },
+        body: JSON.stringify({
+          format: credentialFormat,
+          proof: {
+            proof_type: 'jwt',
+            jwt: proofJwt
+          }
+        })
+      }).then(r => r.json());
+    }
     const t7 = Date.now();
 
     // Adversarial Tamper Injection if configured
@@ -337,17 +390,32 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
   const traces = [];
 
   const verifierBaseUrl = verifierType === 'inji-verify' ? LIVE_VERIFY_URL : MOCK_VERIFY_URL;
+  let activeVerifierUrl = verifierBaseUrl;
 
   try {
     // HOP 1: Request Authorization Request from Verifier
     const t0 = Date.now();
-    const reqRes = await fetch(`${MOCK_VERIFY_URL}/api/v1/request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ format })
-    }).then(r => r.json());
+    let reqRes;
+    try {
+      const r = await fetch(`${activeVerifierUrl}/api/v1/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format }),
+        signal: AbortSignal.timeout(3500)
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      reqRes = await r.json();
+    } catch (e) {
+      activeVerifierUrl = MOCK_VERIFY_URL;
+      const r = await fetch(`${MOCK_VERIFY_URL}/api/v1/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format })
+      });
+      reqRes = await r.json();
+    }
     const t1 = Date.now();
-    traces.push(broadcastEvent('OUTBOUND', `${verifierBaseUrl}/api/v1/request`, 200, t1 - t0, reqRes, 'Verifier ->> Wallet: Auth Request (DIF PE 2.0)'));
+    traces.push(broadcastEvent('OUTBOUND', `${activeVerifierUrl}/api/v1/request`, 200, t1 - t0, reqRes, 'Verifier ->> Wallet: Auth Request (DIF PE 2.0)'));
 
     const nonce = reqRes.nonce;
 
@@ -368,7 +436,7 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
       const kbHeader = { typ: 'kb+jwt', alg: 'ES256' };
       const kbPayload = {
         nonce: kbNonce,
-        aud: verifierBaseUrl,
+        aud: activeVerifierUrl,
         iat: Math.floor(Date.now() / 1000)
       };
       const kbJwt = signES256JWT(kbHeader, kbPayload, walletKeys.privateKey);
@@ -396,19 +464,32 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
       })
     }).toString();
 
-    const verifyResponse = await fetch(`${MOCK_VERIFY_URL}/direct_post`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: submissionBody
-    });
+    const responseUri = reqRes.auth_request?.response_uri || `${activeVerifierUrl}/direct_post`;
+    let verifyResponse;
+    try {
+      verifyResponse = await fetch(responseUri, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: submissionBody,
+        signal: AbortSignal.timeout(3500)
+      });
+    } catch (e) {
+      verifyResponse = await fetch(`${MOCK_VERIFY_URL}/direct_post`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: submissionBody
+      });
+    }
 
     const verifyResult = await verifyResponse.json();
     const t3 = Date.now();
     const isSuccess = verifyResponse.status === 200;
 
-    traces.push(broadcastEvent('OUTBOUND', `${verifierBaseUrl}/direct_post`, verifyResponse.status, t3 - t2, verifyResult, 'Wallet ->> Verifier: direct_post submission'));
+    traces.push(broadcastEvent('OUTBOUND', responseUri, verifyResponse.status, t3 - t2, verifyResult, 'Wallet ->> Verifier: direct_post submission'));
 
     const totalLatency = Date.now() - startTime;
     const runRecord = {

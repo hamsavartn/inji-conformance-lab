@@ -25,6 +25,8 @@ services:
     environment:
       - PORT=4000
       - NODE_ENV=production
+      - MOCK_CERTIFY_URL=http://mock-certify:8080
+      - MOCK_VERIFY_URL=http://mock-verify:8081
       - NODE_OPTIONS=--max-old-space-size=384 --optimize_for_size --max-semi-space-size=16
     command: node backend/server.js
     ports:
@@ -47,10 +49,30 @@ services:
       - .:/app
     environment:
       - PORT=8080
+      - ISSUER_URL=http://mock-certify:8080
       - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
     command: node mocks/issuer/server.js
     ports:
       - "8080:8080"
+    networks:
+      - inji-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  mock-verify:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=8081
+      - VERIFIER_URL=http://mock-verify:8081
+      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
+    command: node mocks/verifier/server.js
+    ports:
+      - "8081:8081"
     networks:
       - inji-net
     deploy:

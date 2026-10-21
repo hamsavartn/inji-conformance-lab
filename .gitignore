@@ -7,3 +7,4 @@ dist/
 *.docx
 *.db
 mosip_inji_conformance_lab.zip
+.playwright-mcp/
