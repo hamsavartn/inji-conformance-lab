@@ -10,6 +10,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies (all sub-packages)
+        # node_modules/ is git-ignored; containers mount host filesystem via volumes.
+        # Installing here ensures all deps exist before docker compose up.
+        # All deps (cbor-x, cors, express, jose, ws, vite) are pure JavaScript —
+        # no native addon ABI incompatibility between Linux host and alpine container.
+        run: |
+          npm --prefix backend ci --omit=dev
+          npm --prefix mocks/issuer ci --omit=dev
+          npm --prefix mocks/verifier ci --omit=dev
+          npm --prefix frontend ci
       - name: Start Docker Compose
         run: docker compose up -d
       - name: Wait for Service Health (fail-closed probe)

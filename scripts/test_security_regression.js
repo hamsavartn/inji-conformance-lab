@@ -295,7 +295,10 @@ async function main() {
   console.log('\n================================================================');
   console.log(`   SECURITY REGRESSION RESULTS: ${passed}/${total} PASSED`);
   console.log('================================================================');
-  process.exit(passed === total ? 0 : 1);
+  // Drain the event loop before exiting so that fetch() keep-alive TCP sockets
+  // can close gracefully on Windows (prevents libuv UV_HANDLE_CLOSING assertion).
+  const exitCode = passed === total ? 0 : 1;
+  setTimeout(() => process.exit(exitCode), 100);
 }
 
 main().catch(err => { console.error('Uncaught error:', err); process.exit(2); });

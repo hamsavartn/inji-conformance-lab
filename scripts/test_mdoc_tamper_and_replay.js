@@ -107,7 +107,12 @@ async function main() {
   const passed = results.filter(r => r.passed).length;
   console.log(`   MDOC ADVERSARIAL RESULTS: ${passed}/${results.length} PASSED`);
   console.log('================================================================');
-  process.exit(passed === results.length ? 0 : 1);
+  // Drain the event loop before exiting so that fetch() keep-alive TCP sockets
+  // can close gracefully on Windows. Without this, Node triggers a libuv
+  // UV_HANDLE_CLOSING assertion in src\win\async.c:94 and exits with code 1
+  // even when all assertions passed.
+  const exitCode = passed === results.length ? 0 : 1;
+  setTimeout(() => process.exit(exitCode), 100);
 }
 
 main().catch(err => {

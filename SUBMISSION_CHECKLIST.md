@@ -51,14 +51,10 @@ Open the zip and confirm it contains: `LICENSE`, `README.md`, `AUDIT_REPORT.md`,
 ### 4. Commit & push with clean history (15 min) ⚠️
 ```bash
 git add -A
-git commit -m "docs(readme): audit-rigor narrative, honest compliance matrix"
-git commit -m "docs(audit): independent re-audit report and verification matrix"
-git commit -m "feat(ci): fail-closed health waits, compose healthchecks, license"
-git commit -m "fix(crypto): enforce sd_hash/audience/PE-claims, DPoP binding, PII redaction"
-git commit -m "test(matrix): genuine replay regression, code-specific chaos assertions, security suite"
+git commit -m "feat(lab): final hackathon submission — all deliverables, audit-verified"
 git push origin master
 ```
-(Split the staged changes into these semantic commits — rules.md says the jury reads commit history.)
+> **Note:** `git add -A` stages everything in one go, so a single commit is the correct approach. The previous multi-commit sequence would fail on commits 2–5 with `fatal: nothing to commit` because the first commit already captured all staged files. If you want separate semantic commits, stage files individually before each commit (e.g., `git add README.md && git commit -m "..."`).
 
 ### 5. Platform submission (20 min) ⚠️
 Whichever portal MOSIP Decode uses (Unstop/hackathon portal):
