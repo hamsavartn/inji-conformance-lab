@@ -1,25 +1,18 @@
 services:
   inji-lab-ui:
-    image: node:22-alpine
+    image: node:22-slim
     working_dir: /app
     volumes:
       - ./frontend:/app
-    environment:
-      - NODE_OPTIONS=--max-old-space-size=192 --optimize_for_size --max-semi-space-size=8
     command: npm run dev -- --host
     ports:
       - "3000:3000"
     networks:
       - inji-net
-    mem_limit: 240m
-    memswap_limit: 240m
-    deploy:
-      resources:
-        limits:
-          memory: 240M
+    mem_limit: 512m
 
   inji-lab-bff:
-    image: node:22-alpine
+    image: node:22-slim
     working_dir: /app
     volumes:
       - .:/app
@@ -28,7 +21,6 @@ services:
       - NODE_ENV=production
       - MOCK_CERTIFY_URL=http://mock-certify:8080
       - MOCK_VERIFY_URL=http://mock-verify:8081
-      - NODE_OPTIONS=--max-old-space-size=224 --optimize_for_size --max-semi-space-size=16
     command: node backend/server.js
     ports:
       - "4000:4000"
@@ -38,69 +30,56 @@ services:
       mock-verify:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/v1/health"]
-      interval: 10s
-      retries: 3
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
     networks:
       - inji-net
-    mem_limit: 280m
-    memswap_limit: 280m
-    deploy:
-      resources:
-        limits:
-          memory: 280M
+    mem_limit: 512m
 
   mock-certify:
-    image: node:22-alpine
+    image: node:22-slim
     working_dir: /app
     volumes:
       - .:/app
     environment:
       - PORT=8080
       - ISSUER_URL=http://mock-certify:8080
-      - NODE_OPTIONS=--max-old-space-size=160 --optimize_for_size --max-semi-space-size=8
     command: node mocks/issuer/server.js
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 10s
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 6
+      start_period: 5s
     networks:
       - inji-net
-    mem_limit: 200m
-    memswap_limit: 200m
-    deploy:
-      resources:
-        limits:
-          memory: 200M
+    mem_limit: 384m
 
   mock-verify:
-    image: node:22-alpine
+    image: node:22-slim
     working_dir: /app
     volumes:
       - .:/app
     environment:
       - PORT=8081
       - VERIFIER_URL=http://mock-verify:8081
-      - NODE_OPTIONS=--max-old-space-size=160 --optimize_for_size --max-semi-space-size=8
     command: node mocks/verifier/server.js
     ports:
       - "8081:8081"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
-      interval: 10s
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 6
+      start_period: 5s
     networks:
       - inji-net
-    mem_limit: 200m
-    memswap_limit: 200m
-    deploy:
-      resources:
-        limits:
-          memory: 200M
+    mem_limit: 384m
 
 networks:
   inji-net:
