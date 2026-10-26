@@ -38,7 +38,13 @@ The **MOSIP Inji Conformance Laboratory** is a complete, production-hardened int
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Visual Interface Previews
+| Main Protocol Inspector & Sequence Graph | 8-Lane Concurrent Interop Conformance Matrix |
+|:---:|:---:|
+| ![MOSIP Inji Conformance Lab Dashboard](docs/screenshots/ui_main_dashboard.jpg) | ![8-Lane Conformance Matrix](docs/screenshots/ui_interop_matrix.jpg) |
+
 ---
+
 
 ## 2. HOW TO UNPACK & RUN THE SYSTEM
 

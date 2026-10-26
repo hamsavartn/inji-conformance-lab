@@ -20,7 +20,14 @@ A browser-based **interoperability playground, conformance oracle, and adversari
 - **8-vector Chaos Monkey** (VEC-01..08) plus an independent adversarial security suite — every attack must be rejected with its specific RFC 7807 error code or the test fails.
 - **Judge Mode**: one click runs the concurrent 8-lane interop matrix, scores it honestly, and exports an interoperability report + RFC 7807 upstream bug reports.
 
+### Visual Interface Previews
+
+| Interactive Protocol Inspector & Live Sequence Diagram | 8-Lane Concurrent Interop Conformance Matrix |
+|:---:|:---:|
+| ![MOSIP Inji Conformance Lab Dashboard](docs/screenshots/ui_main_dashboard.jpg) | ![8-Lane Conformance Matrix](docs/screenshots/ui_interop_matrix.jpg) |
+
 ---
+
 
 ## 2. How We Audited Before Claiming Anything (Read This First)
 

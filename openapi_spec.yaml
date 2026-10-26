@@ -1,48 +1,840 @@
 openapi: 3.0.3
 info:
-  title: Inji Interop Laboratory BFF API
+  title: MOSIP Inji Conformance Laboratory & Interoperability Hub API
   version: 1.0.0
-  description: Central Orchestration and Fuzzing Proxy for MOSIP Inji Protocol Testing.
+  description: |
+    Comprehensive OpenAPI 3.0.3 Specification for the MOSIP Inji Conformance Laboratory (MOSIP Decode 2026, Problem Statement 2).
+    Encompasses the Backend-for-Frontend (BFF) Orchestrator, Mock Inji Certify Issuer (OpenID4VCI Draft 13/14),
+    and Mock Inji Verify Relying Party (OpenID4VP Draft 20-23).
+    
+    Standards Conformance:
+    - OpenID for Verifiable Credential Issuance (OpenID4VCI) Drafts 13 & 14
+    - OpenID for Verifiable Presentations (OpenID4VP) Drafts 20-23
+    - RFC 7515 (JSON Web Signature - IEEE P1363 64-byte ECDSA enforcement)
+    - RFC 9449 (OAuth 2.0 Demonstrating Proof-of-Possession at the Application Layer - DPoP)
+    - RFC 9901 / draft-ietf-oauth-sd-jwt-vc (Selective Disclosure for JWTs - SD-JWT VC)
+    - ISO/IEC 18013-5:2021 (Mobile driving licence / mdoc via CBOR/COSE)
+    - W3C Verifiable Credentials Data Model v1.1 / v2.0 (JSON-LD)
+    - RFC 7807 (Problem Details for HTTP APIs)
+  contact:
+    name: MOSIP Decode 2026 Conformance Engineering Team
+    url: https://github.com/mosip/inji
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
 servers:
-  - url: http://localhost:4000/api/v1
+  - url: http://localhost:4000
+    description: BFF Orchestration Engine & Conformance Hub
+  - url: http://localhost:8080
+    description: Mock Inji Certify Simulator (OpenID4VCI)
+  - url: http://localhost:8081
+    description: Mock Inji Verify Simulator (OpenID4VP)
+
 paths:
-  /orchestrate/issue:
+  # ============================================================================
+  # BFF ORCHESTRATION & TELEMETRY ENDPOINTS (PORT 4000)
+  # ============================================================================
+  /api/v1/health:
+    get:
+      tags:
+        - BFF Orchestrator
+      summary: System health and diagnostic status
+      description: Returns operational status, connected services telemetry, SQLite DB state, and V8 runtime metrics.
+      responses:
+        '200':
+          description: System operational
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/matrix:
+    get:
+      tags:
+        - BFF Orchestrator
+      summary: Retrieve Interoperability Matrix specifications
+      description: Returns all 8 canonical test lanes, draft versions, protocols, formats, and expected outcomes.
+      responses:
+        '200':
+          description: Conformance matrix lane configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixDefinition'
+
+  /api/v1/orchestrate/issue:
     post:
-      summary: Trigger an automated OpenID4VCI issuance flow.
+      tags:
+        - BFF Orchestrator
+      summary: Execute automated OpenID4VCI issuance cycle
+      description: Orchestrates an end-to-end credential issuance session against Mock Inji Certify or Live Collab Sandbox.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                issuerType:
-                  type: string
-                  enum: [inji-certify, mock-vci, external]
-                credentialFormat:
-                  type: string
-                  enum: [vc+sd-jwt, ldp_vc, mso_mdoc]
-                tamperConfig:
-                  type: object
-                  properties:
-                    corruptSignature:
-                      type: boolean
+              $ref: '#/components/schemas/IssueRequest'
       responses:
         '200':
-          description: Lifecycle flow initiated.
-  /orchestrate/verify:
+          description: Issuance cycle complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueResponse'
+        '400':
+          description: Client or protocol parameter error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '502':
+          description: Upstream issuer unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/orchestrate/verify:
     post:
-      summary: Trigger an OpenID4VP direct_post presentation flow.
+      tags:
+        - BFF Orchestrator
+      summary: Execute automated OpenID4VP presentation verification cycle
+      description: Presents credentials to Mock Inji Verify via DIF Presentation Exchange 2.0 direct_post.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                verifierType:
-                  type: string
-                  enum: [inji-verify, mock-vp]
+              $ref: '#/components/schemas/VerifyRequest'
       responses:
         '200':
-          description: Verification cycle complete.
+          description: Verification cycle complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          description: Verification failed or presentation rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/orchestrate/full-matrix:
+    post:
+      tags:
+        - BFF Orchestrator
+      summary: Run full concurrent 8-permutation conformance matrix
+      description: Concurrently executes all 8 matrix lanes, recording latency, pass/fail status, and RFC conformance to SQLite.
+      responses:
+        '200':
+          description: Full matrix test results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FullMatrixReport'
+
+  /api/v1/transpile:
+    post:
+      tags:
+        - Cross-Draft Transpiler
+      summary: Transpile credential request schemas across protocol drafts
+      description: Transpiles OpenID4VCI Draft 13 (singular proof) <-> Draft 14 (plural proofs dictionary) or DIF PE 2.0 <-> DCQL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranspileRequest'
+      responses:
+        '200':
+          description: Transpiled schema output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranspileResponse'
+        '400':
+          description: Unsupported translation path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/history:
+    get:
+      tags:
+        - BFF Orchestrator
+      summary: Retrieve PII-redacted test execution history
+      description: Returns up to 100 recent test runs stored in native SQLite, with all PII claims sanitized and redacted.
+      responses:
+        '200':
+          description: Test execution history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+
+  /api/v1/export-issue:
+    post:
+      tags:
+        - Defect Reporting
+      summary: Generate upstream RFC 7807 GitHub issue report
+      description: Formats a standardized markdown issue report pre-loaded with root-cause analysis, reproducer curl, and telemetry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportIssueRequest'
+      responses:
+        '200':
+          description: Formatted defect report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportIssueResponse'
+
+  # ============================================================================
+  # MOCK INJI CERTIFY ISSUER ENDPOINTS (PORT 8080)
+  # ============================================================================
+  /.well-known/openid-credential-issuer:
+    get:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: OpenID4VCI Issuer Metadata
+      description: Returns credential configurations, supported formats (vc+sd-jwt, dc+sd-jwt, ldp_vc, mso_mdoc), cryptographic suites, and endpoint URLs.
+      responses:
+        '200':
+          description: Credential Issuer metadata document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuerMetadata'
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: OAuth 2.0 Authorization Server Metadata
+      description: Returns OAuth 2.0 server metadata (RFC 8414), token endpoint, DPoP signing algorithm support (ES256), and pre-authorized grant capabilities.
+      responses:
+        '200':
+          description: Authorization Server metadata
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /.well-known/jwks.json:
+    get:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: Issuer JSON Web Key Set (JWKS)
+      description: Public ECDSA P-256 keys used to verify issued credentials and JWS tokens.
+      responses:
+        '200':
+          description: Public JWKS key set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwksResponse'
+
+  /credential-offer:
+    get:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: Generate OpenID4VCI Credential Offer
+      description: Produces an OpenID4VCI Draft 13 / Draft 14 credential offer with pre-authorized code grant and PIN challenge.
+      responses:
+        '200':
+          description: Credential offer JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialOffer'
+
+  /offers/{code}:
+    get:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: Resolve pre-authorized credential offer by code
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Credential offer payload
+        '404':
+          description: Pre-auth code expired or invalid
+
+  /token:
+    post:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: OAuth 2.0 Token Endpoint with RFC 9449 DPoP enforcement
+      description: Issues access tokens and c_nonce. Requires strict DPoP proof matching HTTP method, URL, and anti-replay JTI cache.
+      parameters:
+        - name: DPoP
+          in: header
+          required: true
+          schema:
+            type: string
+          description: RFC 9449 DPoP proof JWT
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  example: urn:ietf:params:oauth:grant-type:pre-authorized_code
+                pre-authorized_code:
+                  type: string
+                  example: demo-pre-auth-code-12345
+                user_pin:
+                  type: string
+                  example: "1234"
+              required:
+                - grant_type
+                - pre-authorized_code
+      responses:
+        '200':
+          description: Token response with access token, c_nonce, and DPoP binding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Invalid grant, expired code, or DPoP validation failure
+
+  /credential:
+    post:
+      tags:
+        - Mock Inji Certify (Issuer)
+      summary: OpenID4VCI Credential Issuance Endpoint
+      description: Generates signed credentials (SD-JWT VC with RFC 7515 IEEE P1363 64-byte signature, W3C JSON-LD, or ISO/IEC 18013-5 mdoc).
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+            example: DPoP eyJhbGci...
+        - name: DPoP
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRequest'
+      responses:
+        '200':
+          description: Credential successfully issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredentialPayload'
+        '400':
+          description: Invalid proof of possession or unsupported format
+
+  # ============================================================================
+  # MOCK INJI VERIFY RELYING PARTY ENDPOINTS (PORT 8081)
+  # ============================================================================
+  /api/v1/request:
+    get:
+      tags:
+        - Mock Inji Verify (Relying Party)
+      summary: OpenID4VP Authorization Request generation (GET)
+      description: Generates an OpenID4VP authorization request with cryptographic nonce and DIF PE 2.0 presentation_definition.
+      responses:
+        '200':
+          description: Authorization request definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthRequestResponse'
+    post:
+      tags:
+        - Mock Inji Verify (Relying Party)
+      summary: OpenID4VP Authorization Request generation (POST)
+      responses:
+        '200':
+          description: Authorization request definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthRequestResponse'
+
+  /requests/{nonce}:
+    get:
+      tags:
+        - Mock Inji Verify (Relying Party)
+      summary: Fetch authorization request state by nonce
+      parameters:
+        - name: nonce
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Request session details
+        '404':
+          description: Nonce expired or not found
+
+  /direct_post:
+    post:
+      tags:
+        - Mock Inji Verify (Relying Party)
+      summary: OpenID4VP direct_post Presentation Submission
+      description: Validates submitted vp_token against requested presentation_definition, enforcing SD-JWT disclosures, sd_hash, KB-JWT nonce, and mdoc digest checks.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                vp_token:
+                  type: string
+                  description: Verifiable Presentation token (SD-JWT string, JSON string, or mdoc base64)
+                presentation_submission:
+                  type: string
+                  description: DIF Presentation Exchange 2.0 submission descriptor JSON string
+              required:
+                - vp_token
+      responses:
+        '200':
+          description: Presentation verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifySuccessResponse'
+        '400':
+          description: Verification rejected (invalid signature, expired, nonce mismatch, wrong type)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: UP
+        version:
+          type: string
+          example: 1.0.0-conformance-hardened
+        services:
+          type: object
+          properties:
+            bff:
+              type: string
+              example: HEALTHY
+            mock_issuer:
+              type: string
+              example: CONFIGURED
+            mock_verifier:
+              type: string
+              example: CONFIGURED
+            live_collab_sandbox:
+              type: string
+              example: CONFIGURED
+        sqlite_db:
+          type: string
+          example: OPERATIONAL
+        v8_memory:
+          type: object
+          properties:
+            heap_used_mb:
+              type: integer
+            heap_total_mb:
+              type: integer
+            rss_mb:
+              type: integer
+
+    IssueRequest:
+      type: object
+      required:
+        - issuerType
+        - credentialFormat
+      properties:
+        issuerType:
+          type: string
+          enum: [inji-certify, mock-vci, external]
+          example: mock-vci
+        credentialFormat:
+          type: string
+          enum: [vc+sd-jwt, dc+sd-jwt, ldp_vc, mso_mdoc]
+          example: vc+sd-jwt
+        draftVersion:
+          type: string
+          enum: [draft-13, draft-14]
+          default: draft-13
+        tamperConfig:
+          $ref: '#/components/schemas/TamperConfig'
+
+    TamperConfig:
+      type: object
+      properties:
+        corruptSignature:
+          type: boolean
+          default: false
+        corruptNonce:
+          type: boolean
+          default: false
+        stripDisclosure:
+          type: boolean
+          default: false
+        replayJti:
+          type: boolean
+          default: false
+        expireCredential:
+          type: boolean
+          default: false
+        corruptDigestId:
+          type: boolean
+          default: false
+        mismatchDocType:
+          type: boolean
+          default: false
+
+    IssueResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        runId:
+          type: string
+          example: test_1730000000000
+        credentialFormat:
+          type: string
+          example: vc+sd-jwt
+        draft:
+          type: string
+          example: draft-13
+        credential:
+          type: string
+          description: Base64 or JWS serialized credential payload
+        disclosures:
+          type: array
+          items:
+            type: string
+        holderJwk:
+          type: object
+        diagnostics:
+          type: object
+          properties:
+            latency_ms:
+              type: integer
+            signature_representation:
+              type: string
+              example: IEEE_P1363_64_BYTE
+            dpop_verified:
+              type: boolean
+              example: true
+
+    VerifyRequest:
+      type: object
+      required:
+        - verifierType
+        - credentialFormat
+        - credentialPayload
+      properties:
+        verifierType:
+          type: string
+          enum: [inji-verify, mock-vp]
+          example: mock-vp
+        credentialFormat:
+          type: string
+          enum: [vc+sd-jwt, dc+sd-jwt, ldp_vc, mso_mdoc]
+          example: vc+sd-jwt
+        credentialPayload:
+          type: string
+        disclosures:
+          type: array
+          items:
+            type: string
+        holderPrivateKeyJwk:
+          type: object
+        tamperConfig:
+          $ref: '#/components/schemas/TamperConfig'
+
+    VerifyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        verifierStatus:
+          type: integer
+          example: 200
+        verifiedClaims:
+          type: object
+        latency_ms:
+          type: integer
+          example: 42
+        conformanceDetails:
+          type: object
+          properties:
+            sd_hash_valid:
+              type: boolean
+            key_binding_valid:
+              type: boolean
+            replay_cache_passed:
+              type: boolean
+
+    TranspileRequest:
+      type: object
+      required:
+        - protocol
+        - targetSchema
+      properties:
+        protocol:
+          type: string
+          enum: [openid4vci, openid4vp]
+        targetSchema:
+          type: string
+          enum: [draft-13, draft-14, dcql, dif-pe-2.0]
+        sourceData:
+          type: object
+
+    TranspileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        protocol:
+          type: string
+        sourceDraft:
+          type: string
+        targetDraft:
+          type: string
+        transpiled:
+          type: object
+        rfcDetails:
+          type: string
+
+    HistoryResponse:
+      type: object
+      properties:
+        runs:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              timestamp:
+                type: string
+              issuer_type:
+                type: string
+              verifier_type:
+                type: string
+              format:
+                type: string
+              status:
+                type: string
+              latency_ms:
+                type: integer
+              tamper_applied:
+                type: string
+              trace_blob:
+                type: string
+
+    ExportIssueRequest:
+      type: object
+      properties:
+        module:
+          type: string
+          default: inji-verify
+        error:
+          type: string
+          example: INJIVER-1131
+        issueType:
+          type: string
+        traceBlob:
+          type: object
+
+    ExportIssueResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        target:
+          type: string
+        markdown:
+          type: string
+
+    FullMatrixReport:
+      type: object
+      properties:
+        summary:
+          type: object
+          properties:
+            total_lanes:
+              type: integer
+              example: 8
+            passed:
+              type: integer
+              example: 8
+            failed:
+              type: integer
+              example: 0
+            conformance_rate_pct:
+              type: number
+              example: 100
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              lane:
+                type: integer
+              name:
+                type: string
+              issuer:
+                type: string
+              wallet:
+                type: string
+              verifier:
+                type: string
+              format:
+                type: string
+              draft:
+                type: string
+              outcome:
+                type: string
+                example: PASS
+              latency_ms:
+                type: integer
+
+    IssuerMetadata:
+      type: object
+      properties:
+        credential_issuer:
+          type: string
+          example: http://localhost:8080
+        credential_endpoint:
+          type: string
+          example: http://localhost:8080/credential
+        credential_configurations_supported:
+          type: object
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: DPoP
+        expires_in:
+          type: integer
+          example: 3600
+        c_nonce:
+          type: string
+        c_nonce_expires_in:
+          type: integer
+          example: 300
+
+    CredentialRequest:
+      type: object
+      properties:
+        format:
+          type: string
+          enum: [vc+sd-jwt, dc+sd-jwt, ldp_vc, mso_mdoc]
+        proof:
+          type: object
+          properties:
+            proof_type:
+              type: string
+              example: jwt
+            jwt:
+              type: string
+
+    IssuedCredentialPayload:
+      type: object
+      properties:
+        format:
+          type: string
+        credential:
+          type: string
+        c_nonce:
+          type: string
+
+    AuthRequestResponse:
+      type: object
+      properties:
+        response_type:
+          type: string
+          example: vp_token
+        client_id:
+          type: string
+        response_uri:
+          type: string
+        nonce:
+          type: string
+        presentation_definition:
+          type: object
+
+    VerifySuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: VERIFIED
+        format:
+          type: string
+        disclosedClaims:
+          type: object
+
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+          example: https://docs.mosip.io/inji/errors/ERR_INVALID_PROOF
+        title:
+          type: string
+          example: Invalid Cryptographic Proof
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          example: RFC 7515 signature verification failed
+        instance:
+          type: string
+          example: /direct_post
+
+    MatrixDefinition:
+      type: object
+      properties:
+        lanes:
+          type: array
+          items:
+            type: object
+
+    JwksResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            type: object

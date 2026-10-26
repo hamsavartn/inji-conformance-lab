@@ -20,6 +20,9 @@
 | 10 | **Interop report sample** | `INTEROP_MATRIX.md` — regenerated on every CI/matrix run | ✅ auto |
 | 11 | **CI pipeline evidence** | `.github/workflows/interop-matrix.yml` — green run on the repo Actions tab | ⚠️ verify run is green |
 | 12 | **LICENSE** | [LICENSE](LICENSE) — Apache-2.0 (hard rules.md requirement; was missing, now fixed) | ✅ done |
+| 13 | **OpenAPI 3.0 Specification** | [openapi_spec.yaml](openapi_spec.yaml) — full spec for BFF, Issuer, Verifier | ✅ done |
+| 14 | **Test Data & Fixtures** | [fixtures/TEST_DATA.md](fixtures/TEST_DATA.md) — pre-seeded keys, subjects, mdoc, chaos | ✅ done |
+| 15 | **UI Interface Screenshots** | `docs/screenshots/` — dashboard & interop matrix visual previews | ✅ done |
 
 ---
 
