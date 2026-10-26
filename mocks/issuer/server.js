@@ -10,6 +10,7 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const { encode: cborEncode, Tag } = require('cbor-x');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -24,7 +25,8 @@ const validPreAuthCodes = new Map([
   ['demo-pre-auth-code-12345', { subject: '123456789012', createdAt: Date.now() }]
 ]);
 const activeCNonces = new Map();
-const consumedDpopJtis = new Set();
+const activeAccessTokens = new Map();
+const consumedDpopJtis = new Map(); // jti -> timestamp (seconds) for TTL eviction
 
 /**
  * Strict RFC 4648 Base64url encoding without padding.
@@ -45,6 +47,106 @@ function sha256Base64Url(asciiString) {
   return toBase64Url(digest);
 }
 
+// Cryptographic Curve Order & Normalization Constants (VULN-01)
+const P256_ORDER = BigInt('0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551');
+const P256_HALF_ORDER = P256_ORDER / 2n;
+
+function normalizeLowS(sBuffer, componentByteLength = 32) {
+  let sVal = BigInt('0x' + (sBuffer.length > 0 ? sBuffer.toString('hex') : '0'));
+  if (sVal > P256_HALF_ORDER) {
+    sVal = P256_ORDER - sVal;
+  }
+  let sHex = sVal.toString(16);
+  if (sHex.length % 2 !== 0) sHex = '0' + sHex;
+  const rawS = Buffer.from(sHex, 'hex');
+  if (rawS.length > componentByteLength) {
+    throw new Error('ERR_SCALAR_OVERFLOW_AFTER_NORMALIZATION');
+  }
+  const paddedS = Buffer.alloc(componentByteLength, 0);
+  rawS.copy(paddedS, componentByteLength - rawS.length);
+  return paddedS;
+}
+
+function convertDerToP1363(derSig, componentByteLength = 32) {
+  const buf = Buffer.isBuffer(derSig) ? derSig : Buffer.from(derSig);
+  if (buf.length < 8 || buf[0] !== 0x30) {
+    throw new Error('ERR_ASN1_DER_INVALID_SEQUENCE_TAG');
+  }
+  let offset = 1;
+  let seqLen = buf[offset++];
+  if (seqLen & 0x80) {
+    const nBytes = seqLen & 0x7f;
+    if (nBytes !== 1 || offset >= buf.length) throw new Error('ERR_ASN1_DER_INVALID_LENGTH');
+    seqLen = buf[offset++];
+  }
+  if (offset + seqLen !== buf.length) {
+    throw new Error('ERR_ASN1_DER_LENGTH_MISMATCH');
+  }
+  const readInt = () => {
+    if (offset + 2 > buf.length || buf[offset++] !== 0x02) {
+      throw new Error('ERR_ASN1_DER_EXPECTED_INTEGER_TAG');
+    }
+    const len = buf[offset++];
+    if (len <= 0 || offset + len > buf.length) {
+      throw new Error('ERR_ASN1_DER_INTEGER_OUT_OF_BOUNDS');
+    }
+    let intSlice = buf.subarray(offset, offset + len);
+    offset += len;
+    while (intSlice.length > 0 && intSlice[0] === 0x00) {
+      intSlice = intSlice.subarray(1);
+    }
+    if (intSlice.length > componentByteLength) {
+      throw new Error('ERR_ASN1_DER_SCALAR_OVERFLOW');
+    }
+    return intSlice;
+  };
+  const r = readInt();
+  const sRaw = readInt();
+  if (offset !== buf.length) {
+    throw new Error('ERR_ASN1_DER_TRAILING_GARBAGE');
+  }
+  const rPadded = Buffer.alloc(componentByteLength, 0);
+  r.copy(rPadded, componentByteLength - r.length);
+  const sNormalized = normalizeLowS(sRaw, componentByteLength);
+  return Buffer.concat([rPadded, sNormalized]);
+}
+
+/**
+ * Computes RFC 7638 JWK Thumbprint (jkt) (VULN-03).
+ */
+function computeRfc7638JwkThumbprint(jwk) {
+  let canonicalJson;
+  if (jwk.kty === 'EC') {
+    canonicalJson = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y });
+  } else if (jwk.kty === 'OKP') {
+    canonicalJson = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x });
+  } else {
+    throw new Error(`ERR_UNSUPPORTED_JWK_KTY_${jwk.kty}`);
+  }
+  return sha256Base64Url(canonicalJson);
+}
+
+/**
+ * Deterministic JSON Canonicalization & W3C LD-Proof Input Hasher (VULN-09).
+ */
+function canonicalizeJsonDeterministic(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalizeJsonDeterministic).join(',')}]`;
+  const sortedKeys = Object.keys(value).sort();
+  return `{${sortedKeys.map((k) => `${JSON.stringify(k)}:${canonicalizeJsonDeterministic(value[k])}`).join(',')}}`;
+}
+
+function computeLdpSigningInput(vcDocument, proofOptions) {
+  const docClone = { ...vcDocument };
+  delete docClone.proof;
+  const proofClone = { ...proofOptions };
+  delete proofClone.proofValue;
+  delete proofClone.jws;
+  const proofHash = crypto.createHash('sha256').update(canonicalizeJsonDeterministic(proofClone), 'utf8').digest();
+  const docHash = crypto.createHash('sha256').update(canonicalizeJsonDeterministic(docClone), 'utf8').digest();
+  return Buffer.concat([proofHash, docHash]);
+}
+
 // Generate ephemeral EC P-256 keypair for ES256 Issuer signing
 const issuerKeyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const issuerJwk = issuerKeyPair.publicKey.export({ format: 'jwk' });
@@ -52,8 +154,15 @@ issuerJwk.kid = 'mosip-issuer-key-2026';
 issuerJwk.use = 'sig';
 issuerJwk.alg = 'ES256';
 
+// Generate ephemeral Ed25519 keypair for W3C VC ldp_vc signing (VULN-10)
+const ed25519IssuerKeyPair = crypto.generateKeyPairSync('ed25519');
+const ed25519Jwk = ed25519IssuerKeyPair.publicKey.export({ format: 'jwk' });
+ed25519Jwk.kid = 'mosip-issuer-ed25519-key-2026';
+ed25519Jwk.use = 'sig';
+ed25519Jwk.alg = 'EdDSA';
+
 /**
- * Strict JWS signing enforcing IEEE P1363 (64-byte r||s) for ES256.
+ * Strict JWS signing enforcing IEEE P1363 (64-byte r||s) for ES256 with Low-S normalization (VULN-01).
  */
 function signJwsStrict(header, payload, privateKey) {
   const encodedHeader = toBase64Url(JSON.stringify(header));
@@ -64,11 +173,19 @@ function signJwsStrict(header, payload, privateKey) {
   if (header.alg === 'EdDSA') {
     signatureBuffer = crypto.sign(null, Buffer.from(signingInput, 'ascii'), privateKey);
   } else if (header.alg === 'ES256') {
-    signatureBuffer = crypto.sign(
+    const rawSig = crypto.sign(
       'SHA256',
       Buffer.from(signingInput, 'ascii'),
       { key: privateKey, dsaEncoding: 'ieee-p1363' }
     );
+    if (rawSig.length === 64) {
+      const r = rawSig.subarray(0, 32);
+      const s = rawSig.subarray(32, 64);
+      const sNorm = normalizeLowS(s, 32);
+      signatureBuffer = Buffer.concat([r, sNorm]);
+    } else {
+      signatureBuffer = convertDerToP1363(rawSig, 32);
+    }
     if (signatureBuffer.length !== 64) {
       throw new Error(`CRITICAL_CRYPTO_ERROR: Expected 64-byte P1363 ES256 signature, got ${signatureBuffer.length} bytes`);
     }
@@ -347,7 +464,8 @@ app.get('/health', (req, res) => {
 
 // JWKS Endpoint
 app.get('/.well-known/jwks.json', (req, res) => {
-  res.json({ keys: [issuerJwk] });
+  const certifyJwk = { ...issuerJwk, kid: 'mosip-certify-key-1' };
+  res.json({ keys: [issuerJwk, certifyJwk, ed25519Jwk] });
 });
 
 // OpenID4VCI Draft 13 Discovery
@@ -473,26 +591,74 @@ app.post('/token', (req, res) => {
     });
   }
 
-  if (!preAuthCode || !validPreAuthCodes.has(preAuthCode)) {
+  const preAuthSession = preAuthCode ? validPreAuthCodes.get(preAuthCode) : null;
+  if (!preAuthSession) {
     return res.status(400).json({
       error: 'invalid_grant',
       error_description: 'The pre-authorized_code is invalid or has expired'
     });
   }
+  if (Date.now() - preAuthSession.createdAt > 300000) {
+    validPreAuthCodes.delete(preAuthCode);
+    return res.status(400).json({
+      error: 'invalid_grant',
+      error_description: 'The pre-authorized_code has expired'
+    });
+  }
 
-  const session = validPreAuthCodes.get(preAuthCode);
   validPreAuthCodes.delete(preAuthCode);
 
   const cNonce = crypto.randomBytes(16).toString('hex');
   const accessToken = 'injicert_at_' + crypto.randomUUID();
-  activeCNonces.set(cNonce, {
-    accessToken,
-    subject: session.subject,
-    createdAt: Date.now()
-  });
 
   const dpopHeader = req.headers['dpop'];
   const tokenType = dpopHeader ? 'DPoP' : 'Bearer';
+  let boundJkt = null;
+
+  if (dpopHeader) {
+    try {
+      const { header: dpopHdr, payload: dpopPay } = verifyJwsFlexible(dpopHeader);
+      if (dpopHdr.jwk) {
+        boundJkt = computeRfc7638JwkThumbprint(dpopHdr.jwk);
+      }
+
+      // RFC 9449 §4.2: DPoP proof must be bound to this endpoint and method, and be fresh
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (dpopPay.htm !== 'POST') {
+        return res.status(400).json({ error: 'invalid_dpop_proof', error_description: 'DPoP htm mismatch' });
+      }
+      const rawHtu = String(dpopPay.htu || '').split('?')[0].split('#')[0];
+      if (!rawHtu.endsWith('/token')) {
+        return res.status(400).json({ error: 'invalid_dpop_proof', error_description: 'DPoP htu path mismatch' });
+      }
+      if (dpopPay.iat === undefined || Math.abs(nowSec - Number(dpopPay.iat)) > 300) {
+        return res.status(400).json({ error: 'invalid_dpop_proof', error_description: 'DPoP iat outside acceptance window' });
+      }
+      if (consumedDpopJtis.size > 2000) {
+        for (const [key, ts] of consumedDpopJtis.entries()) {
+          if (nowSec - ts > 300) consumedDpopJtis.delete(key);
+        }
+      }
+      if (!dpopPay.jti || consumedDpopJtis.has(dpopPay.jti)) {
+        return res.status(400).json({ error: 'invalid_dpop_proof', error_description: 'Replayed or missing DPoP jti' });
+      }
+      consumedDpopJtis.set(dpopPay.jti, nowSec);
+    } catch (e) {
+      return res.status(400).json({ error: 'invalid_dpop_proof', error_description: e.message });
+    }
+  }
+
+  activeCNonces.set(cNonce, {
+    accessToken,
+    subject: preAuthSession.subject,
+    createdAt: Date.now()
+  });
+
+  activeAccessTokens.set(accessToken, {
+    cnf: boundJkt ? { jkt: boundJkt } : null,
+    subject: preAuthSession.subject,
+    createdAt: Date.now()
+  });
 
   res.json({
     access_token: accessToken,
@@ -503,7 +669,7 @@ app.post('/token', (req, res) => {
   });
 });
 
-// OpenID4VCI /credential Endpoint (Hardened with VULN-01, VULN-03, VULN-07, VULN-09)
+// OpenID4VCI /credential Endpoint (Hardened with VULN-01, VULN-03, VULN-07, VULN-08, VULN-09)
 app.post('/credential', (req, res) => {
   const authHeader = req.headers['authorization'] || '';
   const dpopHeader = req.headers['dpop'];
@@ -513,6 +679,16 @@ app.post('/credential', (req, res) => {
   }
 
   const accessToken = authHeader.replace(/^(DPoP|Bearer)\s+/i, '').trim();
+  const tokenSession = activeAccessTokens.get(accessToken);
+
+  // Fail closed on unknown, expired, or missing access tokens (RFC 6749 §5.2 / RFC 9449 §4.2)
+  if (!tokenSession) {
+    return res.status(401).json({ error: 'invalid_token', error_description: 'Access token is invalid, expired, or was not issued by this authorization server' });
+  }
+  if (Date.now() - tokenSession.createdAt > 3600000) {
+    activeAccessTokens.delete(accessToken);
+    return res.status(401).json({ error: 'invalid_token', error_description: 'Access token has expired' });
+  }
 
   // Validate DPoP if DPoP token was used (RFC 9449)
   if (authHeader.startsWith('DPoP ')) {
@@ -523,15 +699,17 @@ app.post('/credential', (req, res) => {
     try {
       const { header: dpopHdr, payload: dpopPay } = verifyJwsFlexible(dpopHeader);
 
-      // 1. Replay prevention on jti (VULN-03)
+      // 1. Replay prevention on jti with TTL eviction (VULN-03)
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (consumedDpopJtis.size > 2000) {
+        for (const [key, ts] of consumedDpopJtis.entries()) {
+          if (nowSec - ts > 300) consumedDpopJtis.delete(key);
+        }
+      }
       if (!dpopPay.jti || consumedDpopJtis.has(dpopPay.jti)) {
         return res.status(401).json({ error: 'invalid_dpop_proof', error_description: 'Replayed or missing DPoP jti' });
       }
-      consumedDpopJtis.add(dpopPay.jti);
-      if (consumedDpopJtis.size > 5000) {
-        const first = consumedDpopJtis.values().next().value;
-        consumedDpopJtis.delete(first);
-      }
+      consumedDpopJtis.set(dpopPay.jti, nowSec);
 
       // 2. Mandatory RFC 9449 Section 4.2 'ath' verification (VULN-03)
       const expectedAth = sha256Base64Url(accessToken);
@@ -542,16 +720,31 @@ app.post('/credential', (req, res) => {
         });
       }
 
-      // 3. htm / htu validation
+      // 3. Sender-Constraining RFC 7638 cnf.jkt check (VULN-03)
+      if (tokenSession && tokenSession.cnf?.jkt && dpopHdr.jwk) {
+        const presentedJkt = computeRfc7638JwkThumbprint(dpopHdr.jwk);
+        if (tokenSession.cnf.jkt !== presentedJkt) {
+          return res.status(401).json({
+            error: 'invalid_dpop_proof',
+            error_description: 'DPoP proof public key thumbprint (jkt) does not match access token cnf.jkt binding'
+          });
+        }
+      }
+
+      // 4. htm / htu validation with normalization (RFC 9449 §4.2)
       if (dpopPay.htm !== 'POST') {
         return res.status(401).json({ error: 'invalid_dpop_proof', error_description: 'DPoP htm mismatch' });
+      }
+      const rawHtu = String(dpopPay.htu || '').split('?')[0].split('#')[0];
+      if (!rawHtu.endsWith('/credential')) {
+        return res.status(401).json({ error: 'invalid_dpop_proof', error_description: 'DPoP htu path mismatch' });
       }
     } catch (err) {
       return res.status(401).json({ error: 'invalid_dpop_proof', error_description: err.message });
     }
   }
 
-  // 4. Extract Holder Proof - Dual Draft 13 / Draft 14 support (VULN-07)
+  // 5. Extract Holder Proof - Dual Draft 13 / Draft 14 support (VULN-04, VULN-07)
   let holderProofJwt = null;
   let detectedDraft = 'draft-13';
   if (req.body.proof && req.body.proof.jwt) {
@@ -576,18 +769,36 @@ app.post('/credential', (req, res) => {
     return res.status(400).json({ error: 'invalid_proof', error_description: err.message });
   }
 
-  // Nonce validation & replay check
+  // Nonce validation & replay check, plus holder-proof audience/iat binding
+  // (RFC 9449 §4.2 / OpenID4VCI Draft 13 §7.2: proof JWT must be bound to this issuer and fresh)
   if (!proofPayload.nonce || !activeCNonces.has(proofPayload.nonce)) {
     return res.status(400).json({ error: 'invalid_proof', error_description: 'c_nonce is missing or expired' });
   }
 
-  const session = activeCNonces.get(proofPayload.nonce);
+  const nonceSession = activeCNonces.get(proofPayload.nonce);
+  if (Date.now() - nonceSession.createdAt > 300000) {
+    activeCNonces.delete(proofPayload.nonce);
+    return res.status(400).json({ error: 'invalid_proof', error_description: 'c_nonce has expired' });
+  }
+
+  const proofAudOk = Array.isArray(proofPayload.aud)
+    ? proofPayload.aud.includes(ISSUER_URL)
+    : proofPayload.aud === ISSUER_URL;
+  if (!proofAudOk) {
+    return res.status(400).json({ error: 'invalid_proof', error_description: `Holder proof audience '${proofPayload.aud}' does not match this credential issuer '${ISSUER_URL}'` });
+  }
+  if (proofPayload.iat !== undefined && Math.abs(Math.floor(Date.now() / 1000) - Number(proofPayload.iat)) > 300) {
+    return res.status(400).json({ error: 'invalid_proof', error_description: 'Holder proof iat outside acceptance window' });
+  }
+
+  const session = nonceSession;
   activeCNonces.delete(proofPayload.nonce);
 
   const format = req.body.format || 'vc+sd-jwt';
 
-  // Support both vc+sd-jwt and dc+sd-jwt (VULN-09)
+  // Support both vc+sd-jwt and dc+sd-jwt with Decoy Digests (VULN-08, VULN-09)
   if (format === 'vc+sd-jwt' || format === 'dc+sd-jwt') {
+    // RFC 9901 §4.2.1: Minimum 128-bit (16-byte) CSPRNG salts
     const salt1 = toBase64Url(crypto.randomBytes(16));
     const salt2 = toBase64Url(crypto.randomBytes(16));
     const salt3 = toBase64Url(crypto.randomBytes(16));
@@ -606,17 +817,40 @@ app.post('/credential', (req, res) => {
     const hashDOB = sha256Base64Url(discDOB);
     const hashPhone = sha256Base64Url(discPhone);
 
-    const issuerHeader = { alg: 'ES256', typ: format, jwk: issuerJwk, kid: 'mosip-certify-key-1' };
+    // RFC 9901 §4.2.5: Inject 3 decoy digests to protect attribute count leakage
+    const decoy1 = sha256Base64Url(toBase64Url(crypto.randomBytes(32)));
+    const decoy2 = sha256Base64Url(toBase64Url(crypto.randomBytes(32)));
+    const decoy3 = sha256Base64Url(toBase64Url(crypto.randomBytes(32)));
+
+    const sdDigests = [hashUIN, hashName, hashGender, hashDOB, hashPhone, decoy1, decoy2, decoy3];
+    // Fisher-Yates CSPRNG shuffle
+    for (let i = sdDigests.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(0, i + 1);
+      [sdDigests[i], sdDigests[j]] = [sdDigests[j], sdDigests[i]];
+    }
+
     const now = Math.floor(Date.now() / 1000);
+    const tamperConfig = req.body.tamperConfig || {};
+    let credentialVct = 'urn:mosip:id:national-id';
+    if (tamperConfig.wrongVcType || tamperConfig.vector === 'VEC-07') {
+      credentialVct = 'LifeInsuranceCredential';
+    }
+
+    let credentialExp = now + 31536000;
+    if (tamperConfig.backdateExpiry || tamperConfig.vector === 'VEC-05') {
+      credentialExp = now - 3600; // Backdated 1 hour ago
+    }
+
+    const issuerHeader = { alg: 'ES256', typ: format, jwk: issuerJwk, kid: issuerJwk.kid };
 
     const issuerPayload = {
       iss: ISSUER_URL,
       sub: proofPayload.iss || 'did:jwk:holder-key-1',
       iat: now,
       nbf: now,
-      exp: now + 31536000,
-      vct: 'urn:mosip:id:national-id',
-      _sd: [hashUIN, hashName, hashGender, hashDOB, hashPhone],
+      exp: credentialExp,
+      vct: credentialVct,
+      _sd: sdDigests,
       _sd_alg: 'sha-256',
       cnf: {
         jwk: holderJwk || {
@@ -641,7 +875,7 @@ app.post('/credential', (req, res) => {
   }
 
   if (format === 'ldp_vc') {
-    const vc = {
+    const vcDocument = {
       '@context': [
         'https://www.w3.org/2018/credentials/v1',
         'https://w3id.org/security/suites/ed25519-2020/v1'
@@ -650,6 +884,7 @@ app.post('/credential', (req, res) => {
       type: ['VerifiableCredential', 'MosipIdentityCredential'],
       issuer: ISSUER_URL,
       issuanceDate: new Date().toISOString(),
+      expirationDate: new Date(Date.now() + 31536000000).toISOString(),
       credentialSubject: {
         id: proofPayload.iss || 'did:key:z6MkhaXgBZDvotDkL5257faiztiCEsJQFbB1jAhpU9g12345',
         UIN: session.subject || '123456789012',
@@ -657,19 +892,110 @@ app.post('/credential', (req, res) => {
         gender: 'Male',
         dob: '1995-08-15',
         phone: '+91-9876543210'
-      },
+      }
+    };
+
+    const proofOptions = {
+      type: 'Ed25519Signature2020',
+      created: new Date().toISOString(),
+      verificationMethod: `${ISSUER_URL}#key-1`,
+      proofPurpose: 'assertionMethod'
+    };
+
+    // VULN-09: Canonical Ed25519 signature computation over complete document + proof options
+    const signingInput = computeLdpSigningInput(vcDocument, proofOptions);
+    const sigBuffer = crypto.sign(null, signingInput, ed25519IssuerKeyPair.privateKey);
+
+    const vc = {
+      ...vcDocument,
       proof: {
-        type: 'Ed25519Signature2020',
-        created: new Date().toISOString(),
-        verificationMethod: `${ISSUER_URL}#key-1`,
-        proofPurpose: 'assertionMethod',
-        proofValue: 'z' + toBase64Url(crypto.randomBytes(64))
+        ...proofOptions,
+        proofValue: 'z' + toBase64Url(sigBuffer)
       }
     };
 
     return res.json({
       format: 'ldp_vc',
       credential: vc,
+      detectedDraft,
+      c_nonce: crypto.randomBytes(16).toString('hex'),
+      c_nonce_expires_in: 300
+    });
+  }
+
+  if (format === 'mso_mdoc') {
+    const rawItems = [
+      { digestID: 0, random: crypto.randomBytes(16), elementIdentifier: 'family_name', elementValue: 'Kumar' },
+      { digestID: 1, random: crypto.randomBytes(16), elementIdentifier: 'given_name', elementValue: 'Aarav' },
+      { digestID: 2, random: crypto.randomBytes(16), elementIdentifier: 'birth_date', elementValue: '1995-08-15' },
+      { digestID: 3, random: crypto.randomBytes(16), elementIdentifier: 'issue_date', elementValue: '2024-01-01' },
+      { digestID: 4, random: crypto.randomBytes(16), elementIdentifier: 'expiry_date', elementValue: '2029-01-01' },
+      { digestID: 5, random: crypto.randomBytes(16), elementIdentifier: 'issuing_country', elementValue: 'IN' },
+      { digestID: 6, random: crypto.randomBytes(16), elementIdentifier: 'document_number', elementValue: 'DL-9876543210' },
+      { digestID: 7, random: crypto.randomBytes(16), elementIdentifier: 'national_id', elementValue: session.subject || '123456789012' }
+    ];
+
+    const valueDigests = {};
+    const encodedItems = rawItems.map(item => {
+      const itemBytes = cborEncode(item);
+      const digest = crypto.createHash('sha256').update(itemBytes).digest();
+      valueDigests[item.digestID] = digest;
+      return new Tag(itemBytes, 24);
+    });
+
+    const mso = {
+      version: '1.0',
+      digestAlgorithm: 'SHA-256',
+      docType: 'org.iso.18013.5.1.mDL',
+      valueDigests: {
+        'org.iso.18013.5.1': valueDigests
+      },
+      validityInfo: {
+        signed: new Date().toISOString(),
+        validFrom: new Date().toISOString(),
+        validUntil: new Date(Date.now() + 31536000000).toISOString()
+      },
+      deviceKeyInfo: {
+        deviceKey: holderJwk || { kty: 'EC', crv: 'P-256' }
+      }
+    };
+
+    const msoBytes = cborEncode(mso);
+    const msoTag24 = new Tag(msoBytes, 24);
+
+    // COSE_Sign1 structure: [protected, unprotected, payload, signature]
+    // Protected header: { 1: -7 } (alg: ES256)
+    const protectedMap = new Map();
+    protectedMap.set(1, -7);
+    const protectedHeaderBytes = cborEncode(protectedMap);
+
+    const sigStructure = ['Signature1', protectedHeaderBytes, Buffer.alloc(0), msoBytes];
+    const toBeSigned = cborEncode(sigStructure);
+    const coseSig = crypto.sign(
+      'SHA256',
+      toBeSigned,
+      { key: issuerKeyPair.privateKey, dsaEncoding: 'ieee-p1363' }
+    );
+
+    const issuerAuth = [protectedHeaderBytes, {}, msoTag24, coseSig];
+
+    const mdocDocument = {
+      docType: 'org.iso.18013.5.1.mDL',
+      issuerSigned: {
+        nameSpaces: {
+          'org.iso.18013.5.1': encodedItems
+        },
+        issuerAuth: issuerAuth
+      }
+    };
+
+    const cborBytes = cborEncode(mdocDocument);
+    const mdocBase64Url = toBase64Url(cborBytes);
+
+    return res.json({
+      format: 'mso_mdoc',
+      credential: mdocBase64Url,
+      doctype: 'org.iso.18013.5.1.mDL',
       detectedDraft,
       c_nonce: crypto.randomBytes(16).toString('hex'),
       c_nonce_expires_in: 300
@@ -718,7 +1044,11 @@ app.use((req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[MOCK-CERTIFY] Inji Certify OpenID4VCI Mock listening on port ${PORT}`);
-  console.log(`[MOCK-CERTIFY] Discovery: ${ISSUER_URL}/.well-known/openid-credential-issuer`);
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[MOCK-CERTIFY] Inji Certify OpenID4VCI Mock listening on port ${PORT}`);
+    console.log(`[MOCK-CERTIFY] Discovery: ${ISSUER_URL}/.well-known/openid-credential-issuer`);
+  });
+}
+
+module.exports = { app };

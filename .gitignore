@@ -6,5 +6,7 @@ dist/
 .qodo/
 *.docx
 *.db
+*.db-shm
+*.db-wal
 mosip_inji_conformance_lab.zip
 .playwright-mcp/

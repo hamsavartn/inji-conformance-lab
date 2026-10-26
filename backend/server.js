@@ -49,6 +49,11 @@ const DB_PATH = process.env.SQLITE_DB_PATH || path.join(DB_DIR, 'conformance.db'
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA synchronous = NORMAL;
+  PRAGMA busy_timeout = 5000;
+  PRAGMA foreign_keys = ON;
+
   CREATE TABLE IF NOT EXISTS test_runs (
     id TEXT PRIMARY KEY,
     timestamp TEXT NOT NULL,
@@ -73,10 +78,32 @@ db.exec(`
     outcome TEXT NOT NULL,
     error_detail TEXT
   );
+  CREATE INDEX IF NOT EXISTS idx_test_runs_timestamp ON test_runs(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_matrix_runs_lane ON matrix_runs(lane);
 `);
 
-// WebSocket Telemetry Hub
-const wss = new WebSocketServer({ server, path: '/telemetry' });
+// WebSocket Telemetry Hub with Origin Verification (CSWSH Guard - Issue 5)
+const ALLOWED_WS_ORIGINS = new Set([
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:4000',
+  'http://127.0.0.1:4000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+]);
+
+const wss = new WebSocketServer({
+  server,
+  path: '/telemetry',
+  verifyClient: (info, callback) => {
+    const origin = info.origin || info.req.headers.origin;
+    // Allow non-browser clients (e.g. wscat, curl, backend tests) or verified localhost origins
+    if (!origin || ALLOWED_WS_ORIGINS.has(origin)) {
+      return callback(true);
+    }
+    return callback(false, 403, 'Forbidden: Cross-Site WebSocket Origin Disallowed');
+  }
+});
 const connectedClients = new Set();
 
 wss.on('connection', (ws) => {
@@ -92,6 +119,65 @@ wss.on('connection', (ws) => {
   });
 });
 
+function sanitizeSdJwtDisclosures(tokenStr) {
+  if (typeof tokenStr !== 'string' || !tokenStr.includes('~')) return tokenStr;
+  const parts = tokenStr.split('~');
+  const issuerJwt = parts[0];
+  const kbJwt = parts[parts.length - 1];
+  const disclosures = parts.slice(1, -1);
+  const sanitizedDisclosures = disclosures.map(d => {
+    try {
+      const decoded = JSON.parse(Buffer.from(d, 'base64url').toString('utf8'));
+      if (Array.isArray(decoded) && decoded.length === 3) {
+        let val = decoded[2];
+        if (decoded[1] === 'UIN' && typeof val === 'string') {
+          val = val.slice(0, 4) + '******' + val.slice(-4);
+        } else if (decoded[1] === 'phone' && typeof val === 'string') {
+          val = val.slice(0, 3) + '******' + val.slice(-4);
+        } else if (['fullName', 'given_name', 'family_name', 'name'].includes(decoded[1]) && typeof val === 'string') {
+          val = val.length > 2 ? val[0] + '******' + val.slice(-1) : '***';
+        } else if (['dob', 'birth_date', 'birthdate'].includes(decoded[1]) && typeof val === 'string') {
+          val = '****-**-**';
+        }
+        return Buffer.from(JSON.stringify([decoded[0], decoded[1], val])).toString('base64url');
+      }
+    } catch (e) {}
+    return d;
+  });
+  return [issuerJwt, ...sanitizedDisclosures, kbJwt].join('~');
+}
+
+function sanitizeTelemetryPayload(data) {
+  if (!data) return data;
+  try {
+    const copy = typeof data === 'object' ? JSON.parse(JSON.stringify(data)) : data;
+    if (typeof copy === 'object' && copy !== null) {
+      if (typeof copy.credential === 'string') copy.credential = sanitizeSdJwtDisclosures(copy.credential);
+      if (typeof copy.vp_token === 'string') copy.vp_token = sanitizeSdJwtDisclosures(copy.vp_token);
+      if (typeof copy.c_nonce === 'string') copy.c_nonce = '[REDACTED_CNONCE]';
+      if (typeof copy.access_token === 'string') copy.access_token = '[REDACTED_ACCESS_TOKEN]';
+    }
+    const str = typeof copy === 'string' ? copy : JSON.stringify(copy);
+    const sanitizedStr = str
+      .replace(/("(?:UIN|extracted_uin|uin)"\s*:\s*")([^"]+)(")/g, (m, p1, p2, p3) => {
+        return `${p1}${p2.length > 4 ? p2.slice(0, 2) + '******' + p2.slice(-2) : '***'}${p3}`;
+      })
+      .replace(/("(?:phone|phone_number|mobile)"\s*:\s*")([^"]+)(")/g, (m, p1, p2, p3) => {
+        return `${p1}${p2.length > 7 ? p2.slice(0, 3) + '******' + p2.slice(-4) : '***'}${p3}`;
+      })
+      .replace(/("(?:fullName|given_name|family_name|name)"\s*:\s*")([^"]+)(")/g, (m, p1, p2, p3) => {
+        return `${p1}${p2.length > 2 ? p2[0] + '******' + p2.slice(-1) : '***'}${p3}`;
+      })
+      .replace(/("(?:dob|birth_date|birthdate)"\s*:\s*")[^"]+(")/g, '$1****-**-**$2')
+      .replace(/("access_token"\s*:\s*")[^"]+(")/g, '$1[REDACTED_ACCESS_TOKEN]$2')
+      .replace(/("c_nonce"\s*:\s*")[^"]+(")/g, '$1[REDACTED_CNONCE]$2')
+      .replace(/("Authorization"\s*:\s*")(?:Bearer|DPoP)\s+[^"]+(")/g, '$1[REDACTED_AUTH_HEADER]$2');
+    return JSON.parse(sanitizedStr);
+  } catch (e) {
+    return data;
+  }
+}
+
 function broadcastEvent(direction, endpoint, status, latencyMs, payload, hopName) {
   const event = {
     type: 'INTERCEPT_EVENT',
@@ -101,19 +187,87 @@ function broadcastEvent(direction, endpoint, status, latencyMs, payload, hopName
     status: status,
     latencyMs: Math.round(latencyMs),
     hopName: hopName || endpoint,
-    payload: payload
+    payload: sanitizeTelemetryPayload(payload)
   };
 
+  const MAX_WS_BACKPRESSURE_BYTES = 512 * 1024; // 512 KB cap per client (VULN-11)
   const serialized = JSON.stringify(event);
   for (const client of connectedClients) {
     if (client.readyState === 1) { // OPEN
+      if (client.bufferedAmount > MAX_WS_BACKPRESSURE_BYTES) {
+        client.terminate(); // Drop slow-consumer DoS socket to protect RAM budget
+        continue;
+      }
       client.send(serialized);
     }
   }
   return event;
 }
 
-// Cryptographic Utilities
+// Cryptographic Utilities & Constants
+const P256_ORDER = BigInt('0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551');
+const P256_HALF_ORDER = P256_ORDER / 2n;
+
+function normalizeLowS(sBuffer, componentByteLength = 32) {
+  let sVal = BigInt('0x' + (sBuffer.length > 0 ? sBuffer.toString('hex') : '0'));
+  if (sVal > P256_HALF_ORDER) {
+    sVal = P256_ORDER - sVal;
+  }
+  let sHex = sVal.toString(16);
+  if (sHex.length % 2 !== 0) sHex = '0' + sHex;
+  const rawS = Buffer.from(sHex, 'hex');
+  if (rawS.length > componentByteLength) {
+    throw new Error('ERR_SCALAR_OVERFLOW_AFTER_NORMALIZATION');
+  }
+  const paddedS = Buffer.alloc(componentByteLength, 0);
+  rawS.copy(paddedS, componentByteLength - rawS.length);
+  return paddedS;
+}
+
+function convertDerToP1363(derSig, componentByteLength = 32) {
+  const buf = Buffer.isBuffer(derSig) ? derSig : Buffer.from(derSig);
+  if (buf.length < 8 || buf[0] !== 0x30) {
+    throw new Error('ERR_ASN1_DER_INVALID_SEQUENCE_TAG');
+  }
+  let offset = 1;
+  let seqLen = buf[offset++];
+  if (seqLen & 0x80) {
+    const nBytes = seqLen & 0x7f;
+    if (nBytes !== 1 || offset >= buf.length) throw new Error('ERR_ASN1_DER_INVALID_LENGTH');
+    seqLen = buf[offset++];
+  }
+  if (offset + seqLen !== buf.length) {
+    throw new Error('ERR_ASN1_DER_LENGTH_MISMATCH');
+  }
+  const readInt = () => {
+    if (offset + 2 > buf.length || buf[offset++] !== 0x02) {
+      throw new Error('ERR_ASN1_DER_EXPECTED_INTEGER_TAG');
+    }
+    const len = buf[offset++];
+    if (len <= 0 || offset + len > buf.length) {
+      throw new Error('ERR_ASN1_DER_INTEGER_OUT_OF_BOUNDS');
+    }
+    let intSlice = buf.subarray(offset, offset + len);
+    offset += len;
+    while (intSlice.length > 0 && intSlice[0] === 0x00) {
+      intSlice = intSlice.subarray(1);
+    }
+    if (intSlice.length > componentByteLength) {
+      throw new Error('ERR_ASN1_DER_SCALAR_OVERFLOW');
+    }
+    return intSlice;
+  };
+  const r = readInt();
+  const sRaw = readInt();
+  if (offset !== buf.length) {
+    throw new Error('ERR_ASN1_DER_TRAILING_GARBAGE');
+  }
+  const rPadded = Buffer.alloc(componentByteLength, 0);
+  r.copy(rPadded, componentByteLength - r.length);
+  const sNormalized = normalizeLowS(sRaw, componentByteLength);
+  return Buffer.concat([rPadded, sNormalized]);
+}
+
 function toBase64Url(input) {
   const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input), 'utf8');
   return buf.toString('base64')
@@ -134,9 +288,8 @@ function generateWalletKeyPair() {
   return persistentWalletKeys;
 }
 
-
 /**
- * Signs JWS strictly enforcing IEEE P1363 (flat 64-byte r||s) for ES256 (VULN-01).
+ * Signs JWS strictly enforcing IEEE P1363 (flat 64-byte r||s) for ES256 with Low-S normalization (VULN-01).
  */
 function signJwsStrict(header, payload, privateKey) {
   const encodedHeader = toBase64Url(JSON.stringify(header));
@@ -147,11 +300,19 @@ function signJwsStrict(header, payload, privateKey) {
   if (header.alg === 'EdDSA') {
     signatureBuffer = crypto.sign(null, Buffer.from(signingInput, 'ascii'), privateKey);
   } else if (header.alg === 'ES256') {
-    signatureBuffer = crypto.sign(
+    const rawSig = crypto.sign(
       'SHA256',
       Buffer.from(signingInput, 'ascii'),
       { key: privateKey, dsaEncoding: 'ieee-p1363' }
     );
+    if (rawSig.length === 64) {
+      const r = rawSig.subarray(0, 32);
+      const s = rawSig.subarray(32, 64);
+      const sNorm = normalizeLowS(s, 32);
+      signatureBuffer = Buffer.concat([r, sNorm]);
+    } else {
+      signatureBuffer = convertDerToP1363(rawSig, 32);
+    }
     if (signatureBuffer.length !== 64) {
       throw new Error(`CRITICAL_CRYPTO_ERROR: Expected 64-byte P1363 ES256 signature, got ${signatureBuffer.length} bytes`);
     }
@@ -226,8 +387,39 @@ function createSdJwtPresentationWithKb({
 }
 
 /**
- * Cross-Draft Transpiler: Normalizes OpenID4VCI between Draft 13 and Draft 14 (VULN-07).
+ * Cross-Draft Transpiler: Normalizes OpenID4VCI between Draft 13 and Draft 14 (VULN-04, VULN-07).
  */
+function transpileVciRequest(body, targetDraft = 'draft-13', issuerDiscoveryMetadata = null) {
+  const supportedConfigs = issuerDiscoveryMetadata?.credential_configurations_supported || {};
+  if (targetDraft === 'draft-13') {
+    if (Array.isArray(body.credential_requests) && body.credential_requests.length > 1) {
+      throw new Error('ERR_DRAFT13_BATCH_REQUIRES_FANOUT: Single /credential endpoint cannot accept multiple credential_requests natively');
+    }
+    const jwtArray = body.proofs?.jwt || (body.proof?.jwt ? [body.proof.jwt] : []);
+    if (jwtArray.length === 0) {
+      throw new Error('ERR_MISSING_HOLDER_PROOF: Proof JWT is required for Draft 13 credential issuance');
+    }
+    const configEntry = body.credential_configuration_id
+      ? supportedConfigs[body.credential_configuration_id]
+      : null;
+    const resolvedFormat = body.format || configEntry?.format || 'vc+sd-jwt';
+    const out = {
+      format: resolvedFormat,
+      proof: { proof_type: 'jwt', jwt: jwtArray[0] }
+    };
+    if (resolvedFormat === 'vc+sd-jwt' || resolvedFormat === 'dc+sd-jwt') {
+      out.vct = body.vct || configEntry?.vct || 'urn:mosip:id:national-id';
+    } else if (resolvedFormat === 'ldp_vc') {
+      out.credential_definition = body.credential_definition || configEntry?.credential_definition || {
+        '@context': ['https://www.w3.org/2018/credentials/v1'],
+        type: ['VerifiableCredential', 'MosipIdentityCredential']
+      };
+    }
+    return out;
+  }
+  return body;
+}
+
 function buildVciProofPayload(proofJwt, targetDraft = 'draft-13') {
   if (targetDraft === 'draft-14') {
     return { proofs: { jwt: [proofJwt] } };
@@ -246,13 +438,14 @@ function buildVciProofPayload(proofJwt, targetDraft = 'draft-13') {
  * - OpenID4VP: DIF Presentation Exchange 2.0 <-> DCQL (Digital Credentials Query Language)
  */
 app.post('/api/v1/transpile', (req, res) => {
-  const { protocol = 'openid4vci', sourceData, targetSchema = 'draft-14' } = req.body;
+  const { protocol = 'openid4vci', sourceData, targetSchema = 'draft-14', issuerMetadata } = req.body;
 
   try {
     if (protocol === 'openid4vci') {
       if (targetSchema === 'draft-14') {
         const jwt = sourceData?.proof?.jwt || (typeof sourceData === 'string' ? sourceData : 'eyJhbGciOiJFUzI1NiIsInR5cCI6Im9wZW5pZDR2Y2ktcHJvb2Yrand0In0.example');
         const transpiled = {
+          credential_configuration_id: sourceData?.credential_configuration_id || 'MosipIdentitySDJWTCredential',
           proofs: {
             jwt: [jwt]
           }
@@ -266,20 +459,14 @@ app.post('/api/v1/transpile', (req, res) => {
           rfcDetails: 'Normalized singular "proof" object to RFC-compliant plural "proofs" dictionary per OpenID4VCI Draft 14 §7.2.'
         });
       } else {
-        const jwt = sourceData?.proofs?.jwt?.[0] || 'eyJhbGciOiJFUzI1NiIsInR5cCI6Im9wZW5pZDR2Y2ktcHJvb2Yrand0In0.example';
-        const transpiled = {
-          proof: {
-            proof_type: 'jwt',
-            jwt
-          }
-        };
+        const normalized = transpileVciRequest(sourceData || { proofs: { jwt: ['mock.proof.jwt'] } }, 'draft-13', issuerMetadata);
         return res.json({
           success: true,
           protocol: 'openid4vci',
           sourceDraft: 'draft-14',
           targetDraft: 'draft-13',
-          transpiled,
-          rfcDetails: 'Converted plural "proofs" array back to Inji Certify Draft 13 singular "proof" DTO format.'
+          transpiled: normalized,
+          rfcDetails: 'Converted plural "proofs" array back to Inji Certify Draft 13 singular "proof" DTO format with resolved credential definitions.'
         });
       }
     } else if (protocol === 'openid4vp') {
@@ -297,18 +484,29 @@ app.post('/api/v1/transpile', (req, res) => {
           }
         ];
         const dcql = {
-          credentials: inputDescriptors.map((desc, idx) => ({
-            id: desc.id || `credential_${idx + 1}`,
-            format: 'dc+sd-jwt',
-            meta: {
-              vct_values: ['urn:mosip:id:national-id', 'MOSIPVerifiableCredential']
-            },
-            claims: (desc.constraints?.fields || []).map(f => {
-              const p = f.path?.[0] || '';
-              const claimName = p.split('.').pop() || 'claim';
-              return { path: [claimName] };
-            })
-          }))
+          credentials: inputDescriptors.map((desc, idx) => {
+            const formatKey = desc.format ? Object.keys(desc.format)[0] : 'dc+sd-jwt';
+            const typeFilter = (desc.constraints?.fields || []).find(f =>
+              f.path?.some(p => p.includes('vct') || p.includes('type'))
+            );
+            const expectedType = typeFilter?.filter?.const
+              || typeFilter?.filter?.pattern
+              || 'urn:mosip:id:national-id';
+            const meta = formatKey === 'ldp_vc'
+              ? { type_values: [['VerifiableCredential', expectedType]] }
+              : { vct_values: [expectedType, 'MOSIPVerifiableCredential'] };
+            return {
+              id: desc.id || `credential_${idx + 1}`,
+              format: formatKey === 'vc+sd-jwt' ? 'dc+sd-jwt' : formatKey,
+              require_cryptographic_holder_binding: true,
+              meta,
+              claims: (desc.constraints?.fields || []).map(f => {
+                const p = f.path?.[0] || '';
+                const claimName = p.split('.').pop() || 'claim';
+                return { path: [claimName] };
+              })
+            };
+          })
         };
         return res.json({
           success: true,
@@ -316,7 +514,7 @@ app.post('/api/v1/transpile', (req, res) => {
           sourceFormat: 'dif_pe_2.0',
           targetFormat: 'dcql',
           transpiled: dcql,
-          rfcDetails: 'Transpiled DIF Presentation Exchange 2.0 input_descriptors to OpenID4VP Draft 23 DCQL (Digital Credentials Query Language).'
+          rfcDetails: 'Transpiled DIF Presentation Exchange 2.0 input_descriptors to OpenID4VP Draft 23 DCQL with meta.vct_values and holder binding assertions.'
         });
       } else {
         const credentials = sourceData?.credentials || [
@@ -784,20 +982,45 @@ app.get('/telemetry', (req, res) => {
       const dirClass = data.direction === 'INBOUND' ? 'dir-inbound' : (data.direction === 'OUTBOUND' ? 'dir-outbound' : 'dir-sys');
       const statusClass = (data.status >= 200 && data.status < 300) ? 'status-200' : 'status-err';
 
-      card.innerHTML = \`
-        <div class="log-header">
-          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-            <span class="log-dir \${dirClass}">\${data.direction || data.type || 'SYSTEM'}</span>
-            <span class="log-endpoint">\${data.hopName || data.endpoint || data.message || 'Telemetry Event'}</span>
-          </div>
-          <div class="log-meta">
-            \${data.status ? \`<span class="status-badge \${statusClass}">HTTP \${data.status}</span>\` : ''}
-            \${data.latencyMs !== undefined ? \`<span>⏱️ \${data.latencyMs}ms</span>\` : ''}
-            <span>\${new Date(data.timestamp || Date.now()).toLocaleTimeString()}</span>
-          </div>
-        </div>
-        \${data.payload ? \`<pre class="log-payload">\${JSON.stringify(data.payload, null, 2)}</pre>\` : ''}
-      \`;
+      // Build with DOM APIs + textContent: telemetry payloads are attacker-influenced
+      // (credential claims) and must never be interpolated into innerHTML (XSS)
+      const headerDiv = document.createElement('div');
+      headerDiv.className = 'log-header';
+      const leftDiv = document.createElement('div');
+      leftDiv.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;';
+      const dirSpan = document.createElement('span');
+      dirSpan.className = 'log-dir ' + dirClass;
+      dirSpan.textContent = data.direction || data.type || 'SYSTEM';
+      const epSpan = document.createElement('span');
+      epSpan.className = 'log-endpoint';
+      epSpan.textContent = data.hopName || data.endpoint || data.message || 'Telemetry Event';
+      leftDiv.appendChild(dirSpan);
+      leftDiv.appendChild(epSpan);
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'log-meta';
+      if (data.status) {
+        const stSpan = document.createElement('span');
+        stSpan.className = 'status-badge ' + statusClass;
+        stSpan.textContent = 'HTTP ' + data.status;
+        metaDiv.appendChild(stSpan);
+      }
+      if (data.latencyMs !== undefined) {
+        const latSpan = document.createElement('span');
+        latSpan.textContent = '⏱️ ' + data.latencyMs + 'ms';
+        metaDiv.appendChild(latSpan);
+      }
+      const tsSpan = document.createElement('span');
+      tsSpan.textContent = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+      metaDiv.appendChild(tsSpan);
+      headerDiv.appendChild(leftDiv);
+      headerDiv.appendChild(metaDiv);
+      card.appendChild(headerDiv);
+      if (data.payload) {
+        const pre = document.createElement('pre');
+        pre.className = 'log-payload';
+        pre.textContent = JSON.stringify(data.payload, null, 2);
+        card.appendChild(pre);
+      }
 
       logContainer.insertBefore(card, logContainer.firstChild);
     }
@@ -891,7 +1114,8 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
   const startTime = Date.now();
   const {
     issuerType = 'mock-vci',
-    credentialFormat = 'vc+sd-jwt',
+    walletType = 'synthetic-agent',
+    credentialFormat = req.body.format || 'vc+sd-jwt',
     tamperConfig = {},
     targetDraft = 'draft-13',
     selectedClaims = ['UIN', 'fullName', 'dob', 'gender', 'phone']
@@ -923,9 +1147,6 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     const t1 = Date.now();
     traces.push(broadcastEvent('OUTBOUND', `${activeIssuerUrl}/.well-known/openid-credential-issuer`, 200, t1 - t0, metaRes, 'Wallet ->> Issuer: Discovery'));
 
-    const tokenEndpoint = metaRes?.token_endpoint || `${activeIssuerUrl}/token`;
-    const credentialEndpoint = metaRes?.credential_endpoint || `${activeIssuerUrl}/credential`;
-
     // HOP 2: Credential Offer
     const t2 = Date.now();
     let offerRes;
@@ -934,12 +1155,19 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       offerRes = await r.json();
     } catch (e) {
+      // Fall back to the deterministic local mock for the remainder of this run so that
+      // DPoP htu and proof audience stay consistent with the issuer actually being used
+      activeIssuerUrl = MOCK_CERTIFY_URL;
+      metaRes = await fetch(`${MOCK_CERTIFY_URL}/.well-known/openid-credential-issuer`).then(r => r.json());
       offerRes = await fetch(`${MOCK_CERTIFY_URL}/credential-offer?uin=123456789012`).then(r => r.json());
     }
     const t3 = Date.now();
     traces.push(broadcastEvent('INBOUND', `${activeIssuerUrl}/credential-offer`, 200, t3 - t2, offerRes, 'Issuer ->> Wallet: Credential Offer'));
 
     const preAuthCode = offerRes.credential_offer.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code']['pre-authorized_code'];
+
+    let tokenEndpoint = metaRes?.token_endpoint || `${activeIssuerUrl}/token`;
+    let credentialEndpoint = metaRes?.credential_endpoint || `${activeIssuerUrl}/credential`;
 
     // HOP 3: Request Token (/token) with DPoP
     const walletKeys = generateWalletKeyPair();
@@ -970,7 +1198,9 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       tokenRes = await r.json();
     } catch (e) {
-      tokenRes = await fetch(`${MOCK_CERTIFY_URL}/token`, {
+      activeIssuerUrl = MOCK_CERTIFY_URL;
+      tokenEndpoint = `${MOCK_CERTIFY_URL}/token`;
+      tokenRes = await fetch(tokenEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -984,6 +1214,11 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     }
     const t5 = Date.now();
     traces.push(broadcastEvent('OUTBOUND', tokenEndpoint, 200, t5 - t4, tokenRes, 'Wallet ->> Issuer: Token Request (DPoP)'));
+
+    // After any fallback, bind the credential request to the issuer that actually served the token
+    if (activeIssuerUrl === MOCK_CERTIFY_URL) {
+      credentialEndpoint = `${MOCK_CERTIFY_URL}/credential`;
+    }
 
     const accessToken = tokenRes.access_token;
     const cNonce = tokenRes.c_nonce;
@@ -1009,6 +1244,7 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
     // Cross-Draft Proof Payload Normalization (VULN-07)
     const vciRequestBody = {
       format: credentialFormat,
+      tamperConfig: tamperConfig,
       ...buildVciProofPayload(proofJwt, targetDraft)
     };
 
@@ -1048,20 +1284,16 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
       tamperApplied = 'VEC-01:SIGNATURE_BIT_FLIP';
       if (typeof finalCredential === 'string' && finalCredential.includes('~')) {
         const parts = finalCredential.split('~');
-        parts[0] = parts[0].slice(0, -1) + 'Z';
+        const jwtParts = parts[0].split('.');
+        const sigBuf = Buffer.from(jwtParts[2], 'base64url');
+        sigBuf[10] ^= 0x01; // Genuine 1-bit cryptographic corruption
+        jwtParts[2] = sigBuf.toString('base64url');
+        parts[0] = jwtParts.join('.');
         finalCredential = parts.join('~');
       } else if (typeof finalCredential === 'string') {
-        finalCredential = finalCredential.slice(0, -1) + 'Z';
-      }
-    } else if (tamperConfig.vector === 'VEC-02' || tamperConfig.backdateExpiry) {
-      tamperApplied = 'VEC-02:EXPIRY_BACKDATE';
-      if (typeof finalCredential === 'string' && finalCredential.includes('~')) {
-        const parts = finalCredential.split('~');
-        const jwtParts = parts[0].split('.');
-        const payload = JSON.parse(Buffer.from(jwtParts[1], 'base64url').toString('utf8'));
-        payload.exp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
-        parts[0] = signJwsStrict(JSON.parse(Buffer.from(jwtParts[0], 'base64url').toString('utf8')), payload, walletKeys.privateKey);
-        finalCredential = parts.join('~');
+        const sigBuf = Buffer.from(finalCredential, 'base64url');
+        if (sigBuf.length > 10) sigBuf[10] ^= 0x01;
+        finalCredential = sigBuf.toString('base64url');
       }
     } else if (tamperConfig.vector === 'VEC-04' || tamperConfig.unboundDisclosure) {
       tamperApplied = 'VEC-04:UNBOUND_DISCLOSURE';
@@ -1071,28 +1303,10 @@ app.post('/api/v1/orchestrate/issue', async (req, res) => {
       }
     } else if (tamperConfig.vector === 'VEC-07' || tamperConfig.wrongVcType) {
       tamperApplied = 'VEC-07:INJIVER_1131_WRONG_TYPE';
-      if (typeof finalCredential === 'string' && finalCredential.includes('~')) {
-        const parts = finalCredential.split('~');
-        const jwtParts = parts[0].split('.');
-        const hdr = JSON.parse(Buffer.from(jwtParts[0], 'base64url').toString('utf8'));
-        const payload = JSON.parse(Buffer.from(jwtParts[1], 'base64url').toString('utf8'));
-        hdr.jwk = walletJwk;
-        payload.vct = 'LifeInsuranceCredential'; // Wrong type to trigger INJIVER-1131 mitigation
-        parts[0] = signJwsStrict(hdr, payload, walletKeys.privateKey);
-        finalCredential = parts.join('~');
-      }
+      // Authentically signed by issuer key with LifeInsuranceCredential vct via tamperConfig
     } else if (tamperConfig.vector === 'VEC-05' || tamperConfig.backdateExpiry) {
       tamperApplied = 'VEC-05:EXPIRED_CREDENTIAL';
-      if (typeof finalCredential === 'string' && finalCredential.includes('~')) {
-        const parts = finalCredential.split('~');
-        const jwtParts = parts[0].split('.');
-        const hdr = JSON.parse(Buffer.from(jwtParts[0], 'base64url').toString('utf8'));
-        const payload = JSON.parse(Buffer.from(jwtParts[1], 'base64url').toString('utf8'));
-        hdr.jwk = walletJwk;
-        payload.exp = Math.floor(Date.now() / 1000) - 3600; // Expired 1 hour ago
-        parts[0] = signJwsStrict(hdr, payload, walletKeys.privateKey);
-        finalCredential = parts.join('~');
-      }
+      // Authentically signed by issuer key with backdated exp via tamperConfig
 
     } else if (tamperConfig.vector === 'VEC-06') {
       tamperApplied = 'VEC-06:RECURSIVE_SD_LOOP';
@@ -1158,10 +1372,12 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
   const startTime = Date.now();
   const {
     verifierType = 'mock-vp',
+    walletType = 'synthetic-agent',
     credential,
     format = 'vc+sd-jwt',
     tamperConfig = {},
-    selectedClaims = ['UIN', 'fullName', 'dob', 'gender', 'phone']
+    selectedClaims = ['UIN', 'fullName', 'dob', 'gender', 'phone'],
+    nonce: explicitNonce
   } = req.body;
   const traces = [];
 
@@ -1193,7 +1409,7 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
     const t1 = Date.now();
     traces.push(broadcastEvent('OUTBOUND', `${activeVerifierUrl}/api/v1/request`, 200, t1 - t0, reqRes, 'Verifier ->> Wallet: Auth Request (DIF PE 2.0)'));
 
-    const nonce = reqRes.nonce;
+    const nonce = explicitNonce || reqRes.nonce;
 
     // HOP 2: Construct Verifiable Presentation with Holder Key Binding & sd_hash (VULN-02)
     let vpToken = credential;
@@ -1246,10 +1462,13 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
 
     // HOP 3: Submit to /direct_post using URLSearchParams to prevent '+' -> ' ' corruption (VULN-04)
     const t2 = Date.now();
+    const tokenToSubmit = typeof vpToken === 'object' && vpToken !== null ? JSON.stringify(vpToken) : String(vpToken);
     const submissionBody = new URLSearchParams({
-      vp_token: vpToken,
+      vp_token: tokenToSubmit,
+      nonce: nonce,
       presentation_submission: JSON.stringify({
         id: `submission_${crypto.randomUUID()}`,
+        nonce: nonce,
         definition_id: reqRes.auth_request?.presentation_definition?.id || 'mosip_identity_card',
         descriptor_map: [{ id: 'mosip_identity_card', format, path: '$' }]
       })
@@ -1293,7 +1512,8 @@ app.post('/api/v1/orchestrate/verify', async (req, res) => {
       isSuccess ? 'VERIFIED_PASS' : `REJECTED_${verifyResult.error || 'FAIL'}`,
       totalLatency,
       tamperApplied,
-      JSON.stringify(verifyResult)
+      // Persist a sanitized trace: disclosed claims / PII must not be stored in cleartext
+      JSON.stringify(sanitizeTelemetryPayload(verifyResult) || verifyResult)
     );
 
     res.status(verifyResponse.status).json({
@@ -1396,11 +1616,22 @@ app.post('/api/v1/orchestrate/full-matrix', async (req, res) => {
   });
 });
 
-// History endpoint (SQLite backed)
+// History endpoint (SQLite backed). Rows are PII-redacted on the way out as defense in
+// depth — older rows written before sanitization-at-write must not leak disclosed claims.
 app.get('/api/v1/history', (req, res) => {
   const query = db.prepare('SELECT * FROM test_runs ORDER BY timestamp DESC LIMIT 100');
   const rows = query.all();
-  res.json({ runs: rows });
+  const sanitizedRows = rows.map(row => {
+    if (typeof row.trace_blob === 'string' && row.trace_blob) {
+      try {
+        row.trace_blob = JSON.stringify(sanitizeTelemetryPayload(JSON.parse(row.trace_blob)));
+      } catch (e) {
+        row.trace_blob = '[REDACTED_UNPARSEABLE_TRACE]';
+      }
+    }
+    return row;
+  });
+  res.json({ runs: sanitizedRows });
 });
 
 // Upstream RFC 7807 GitHub Issue Exporter pre-loaded with documented MOSIP gaps
@@ -1553,7 +1784,11 @@ app.use((req, res) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[BFF] Hardened Inji Conformance Laboratory BFF running on port ${PORT}`);
-  console.log(`[BFF] Telemetry WebSocket listening at ws://localhost:${PORT}/telemetry`);
-});
+if (require.main === module) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[BFF] Hardened Inji Conformance Laboratory BFF running on port ${PORT}`);
+    console.log(`[BFF] Telemetry WebSocket listening at ws://localhost:${PORT}/telemetry`);
+  });
+}
+
+module.exports = { app, server };

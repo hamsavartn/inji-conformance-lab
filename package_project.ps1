@@ -1,49 +1,68 @@
 # Packaging script for MOSIP Inji Conformance Lab
-$Destination = "mosip_inji_conformance_lab.zip"
-if (Test-Path $Destination) {
-    Remove-Item $Destination -Force
-}
+# Builds mosip_inji_conformance_lab.zip with the CORRECT directory structure
+# (the previous recursive file-list approach flattened every file to the archive
+#  root, colliding server.js/package.json copies and losing all subdirectories).
+#
+# Method: stage a clean copy via robocopy (with directory/file exclusions),
+# then Compress-Archive the staging root so relative paths are preserved.
 
-# Explicitly target project source directories and core files
-$IncludePatterns = @(
-    "backend\*",
-    "frontend\src\*",
-    "frontend\index.html",
-    "frontend\package.json",
-    "frontend\tsconfig.json",
-    "frontend\vite.config.ts",
-    "mocks\*",
-    "fixtures\*",
-    "scripts\*",
-    "db\*",
-    ".github\*",
-    ".agents\skills\*",
-    "*.md",
-    "*.yaml",
-    "*.yml",
-    "*.json",
-    "package_project.ps1"
+$ErrorActionPreference = "Stop"
+$Destination = "mosip_inji_conformance_lab.zip"
+$Staging = "package_staging"
+
+if (Test-Path $Destination) { Remove-Item $Destination -Force }
+if (Test-Path $Staging) { Remove-Item $Staging -Recurse -Force }
+
+# Directories to exclude entirely
+$ExcludeDirs = @(
+    "node_modules", "dist", ".git", ".qodo", ".gemini", ".playwright-mcp",
+    ".zcode", ".claude", ".agents", "package_staging"
+)
+# Files to exclude (hackathon briefs, binary DB runtime files, the zip itself)
+$ExcludeFiles = @(
+    "*.db", "*.db-shm", "*.db-wal", "*.zip", "*.docx",
+    "mosip_inji_conformance_lab.zip"
 )
 
-$FilesToZip = Get-ChildItem -Path . -Recurse | Where-Object {
-    $path = $_.FullName
-    # Exclude node_modules, dist, git, zip, and docx
-    if ($path -like "*\node_modules\*" -or $path -like "*/node_modules/*") { return $false }
-    if ($path -like "*\dist\*" -or $path -like "*/dist/*") { return $false }
-    if ($path -like "*\.qodo\*" -or $path -like "*/.qodo/*") { return $false }
-    if ($path -like "*\.git\*" -or $path -like "*/.git/*") { return $false }
-    if ($path -like "*\.gemini\*" -or $path -like "*/.gemini/*") { return $false }
-    if ($_.Name -eq $Destination -or $_.Name -like "*.docx") { return $false }
-    
-    # Exclude other agent subdirectories except .agents
-    if ($_.FullName -match '\\\.(aider|autohand|augment|bob|claude|code|continue|cortex|crush|devin|forge|goose|grok|hermes|iflow|inference|jazz|junie|kimchi|kiro|kode|lingma|mcpjam|minimax|moxby|mux|neovate|ona|openhands|pochi|posit|qoder|qwen|reasonix|roo|rovodev|tabnine|terramind|tinycloud|trae|vibe|windsurf|zcode|zencoder|adal)\\') {
-        return $false
-    }
-    
-    return -not $_.PSIsContainer
+Write-Host "Staging clean project tree..." -ForegroundColor Cyan
+robocopy . $Staging /E /NFL /NDL /NJH /NJS /NP /XD @ExcludeDirs /XF @ExcludeFiles
+if ($LASTEXITCODE -ge 8) {
+    Write-Host "robocopy failed with code $LASTEXITCODE" -ForegroundColor Red
+    exit 1
 }
 
-Write-Host "Compressing $($FilesToZip.Count) clean source items into $Destination..." -ForegroundColor Cyan
-Compress-Archive -Path $FilesToZip.FullName -DestinationPath $Destination -CompressionLevel Optimal -Force
-Write-Host "Package complete: $Destination" -ForegroundColor Green
-Get-Item $Destination | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+Write-Host "Compressing staged tree into $Destination..." -ForegroundColor Cyan
+Compress-Archive -Path (Join-Path $Staging "*") -DestinationPath $Destination -CompressionLevel Optimal -Force
+
+Remove-Item $Staging -Recurse -Force
+
+$Zip = Get-Item $Destination
+Write-Host "Package complete: $($Zip.Name) ($([math]::Round($Zip.Length/1MB,2)) MB)" -ForegroundColor Green
+
+# Post-condition: the critical paths MUST exist with directory structure
+# (Compress-Archive on Windows stores separators as backslashes — normalize before comparing)
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$Archive = [IO.Compression.ZipFile]::OpenRead($Zip.FullName)
+$Names = $Archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+$Archive.Dispose()
+$Required = @(
+    "backend/server.js",
+    "mocks/issuer/server.js",
+    "mocks/verifier/server.js",
+    "frontend/src/App.tsx",
+    "scripts/test_e2e_local.js",
+    "scripts/test_security_regression.js",
+    "docs/DEMO_VIDEO_SCRIPT.md",
+    "docs/verification-matrix.md",
+    "LICENSE",
+    "README.md",
+    "PITCH_DECK.pptx",
+    "docker-compose.yml",
+    ".github/workflows/interop-matrix.yml"
+)
+$Missing = $Required | Where-Object { $Names -notcontains $_ }
+if ($Missing.Count -gt 0) {
+    Write-Host "VERIFICATION FAILED - missing from zip: $($Missing -join ', ')" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Verified: all $($Required.Count) critical deliverables present with correct paths." -ForegroundColor Green

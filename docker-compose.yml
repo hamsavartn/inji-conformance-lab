@@ -1,6 +1,6 @@
 services:
   inji-lab-ui:
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /app
     volumes:
       - ./frontend:/app
@@ -19,7 +19,7 @@ services:
           memory: 240M
 
   inji-lab-bff:
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /app
     volumes:
       - .:/app
@@ -32,6 +32,11 @@ services:
     command: node backend/server.js
     ports:
       - "4000:4000"
+    depends_on:
+      mock-certify:
+        condition: service_healthy
+      mock-verify:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/v1/health"]
       interval: 10s
@@ -46,7 +51,7 @@ services:
           memory: 280M
 
   mock-certify:
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /app
     volumes:
       - .:/app
@@ -57,6 +62,11 @@ services:
     command: node mocks/issuer/server.js
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - inji-net
     mem_limit: 200m
@@ -67,7 +77,7 @@ services:
           memory: 200M
 
   mock-verify:
-    image: node:20-alpine
+    image: node:22-alpine
     working_dir: /app
     volumes:
       - .:/app
@@ -78,6 +88,11 @@ services:
     command: node mocks/verifier/server.js
     ports:
       - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - inji-net
     mem_limit: 200m

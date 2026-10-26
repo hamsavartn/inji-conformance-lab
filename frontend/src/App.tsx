@@ -5,7 +5,7 @@ import {
   ShieldCheck, AlertTriangle, Play, RefreshCw, Cpu, Layers,
   Terminal, Award, ExternalLink, Copy, CheckCircle2, XCircle,
   Sliders, Activity, ArrowRight, FileCode, Check, QrCode,
-  Shuffle, Eye, EyeOff, Lock, Unlock, Database, GitPullRequest
+  Shuffle, Eye, EyeOff, Lock, Unlock, Database, GitPullRequest, Clock
 } from 'lucide-react';
 
 interface TelemetryEvent {
@@ -37,12 +37,11 @@ const API_BASE = typeof window !== 'undefined' && window.location.hostname ? `ht
 const WS_BASE = typeof window !== 'undefined' && window.location.hostname ? `ws://${window.location.hostname}:4000` : 'ws://localhost:4000';
 
 const AVAILABLE_CLAIMS = [
-  { id: 'fullName', label: 'Full Legal Name', sample: 'John Doe', sensitive: false },
-  { id: 'dob', label: 'Date of Birth', sample: '1985-05-15', sensitive: false },
-  { id: 'gender', label: 'Gender', sample: 'M', sensitive: false },
-  { id: 'UIN', label: 'National ID / UIN', sample: '987654321098', sensitive: true },
-  { id: 'streetAddress', label: 'Street Address', sample: '123 Tech Park Way', sensitive: true },
-  { id: 'locality', label: 'Locality / City', sample: 'Bangalore', sensitive: false }
+  { id: 'fullName', label: 'Full Legal Name', sample: 'Aarav Kumar', sensitive: false },
+  { id: 'dob', label: 'Date of Birth', sample: '1995-08-15', sensitive: false },
+  { id: 'gender', label: 'Gender', sample: 'Male', sensitive: false },
+  { id: 'UIN', label: 'National ID / UIN', sample: '123456789012', sensitive: true },
+  { id: 'phone', label: 'Phone Number', sample: '+91-9876543210', sensitive: true }
 ];
 
 export default function App() {
@@ -66,10 +65,20 @@ export default function App() {
   const [verificationResult, setVerificationResult] = useState<any>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
+
+  // Client-side SHA-256 disclosure digest verification state (anatomy tab badges)
+  const [disclosureDigestState, setDisclosureDigestState] = useState<Record<string, 'match' | 'unbound' | 'checking'>>({});
 
   // Inspector View Tab
-  const [activeTab, setActiveTab] = useState<'anatomy' | 'privacy' | 'transpiler' | 'sequence' | 'raw' | 'scorecard'>('anatomy');
+  const [activeTab, setActiveTab] = useState<'anatomy' | 'privacy' | 'transpiler' | 'sequence' | 'raw' | 'scorecard' | 'history'>('anatomy');
   const [matrixReport, setMatrixReport] = useState<{ summary: any; results: MatrixResult[] } | null>(null);
+
+  // Historical Run State (FEAT-11)
+  const [historyRuns, setHistoryRuns] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyFilterFormat, setHistoryFilterFormat] = useState('ALL');
+  const [historyFilterStatus, setHistoryFilterStatus] = useState('ALL');
 
   // Bug Exporter Modal
   const [showIssueModal, setShowIssueModal] = useState(false);
@@ -178,11 +187,68 @@ sequenceDiagram
     }
   }, [activeTab, selectedIssuer, selectedVerifier, selectedFormat, tamperVector, selectedClaims, events]);
 
+  // Genuine client-side SHA-256 digest verification of each disclosure against _sd
+  useEffect(() => {
+    let cancelled = false;
+    async function verifyDisclosures() {
+      const token = issuedCredential;
+      if (!token || typeof token !== 'string' || !token.includes('~')) {
+        setDisclosureDigestState({});
+        return;
+      }
+      const parts = token.split('~');
+      let payload: any = null;
+      try {
+        const segs = parts[0].split('.');
+        const b64 = segs[1].replace(/-/g, '+').replace(/_/g, '/');
+        payload = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)));
+      } catch (e) {
+        payload = null;
+      }
+      const sdArray: string[] = Array.isArray(payload?._sd) ? payload._sd : [];
+      const nextState: Record<string, 'match' | 'unbound' | 'checking'> = {};
+      for (const d of parts.slice(1).filter(Boolean)) {
+        nextState[d] = 'checking';
+        try {
+          const digestBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(d));
+          const digest = btoa(String.fromCharCode(...new Uint8Array(digestBuf)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+          nextState[d] = sdArray.includes(digest) ? 'match' : 'unbound';
+        } catch (e) {
+          nextState[d] = 'unbound';
+        }
+      }
+      if (!cancelled) setDisclosureDigestState(nextState);
+    }
+    verifyDisclosures();
+    return () => { cancelled = true; };
+  }, [issuedCredential]);
+
+  // Historical Run Fetcher (FEAT-11)
+  async function fetchHistory() {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/history`).then(r => r.json());
+      if (res && Array.isArray(res.runs)) {
+        setHistoryRuns(res.runs);
+      }
+    } catch (e) {
+      console.error('History fetch failed:', e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
   // Execute End-to-End Handshake
   async function handleExecuteFlow() {
     setIsRunning(true);
     setActiveHop('Initiating Full Lifecycle Handshake...');
     setVerificationResult(null);
+    setExecError(null);
 
     const tamperConfig: any = {};
     if (tamperVector !== 'NONE') {
@@ -196,10 +262,15 @@ sequenceDiagram
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           issuerType: selectedIssuer,
+          walletType: selectedWallet,
           credentialFormat: selectedFormat,
           tamperConfig
         })
       }).then(r => r.json());
+
+      if (!issueRes || !issueRes.credential) {
+        throw new Error(issueRes?.details || issueRes?.error || 'Issuance orchestration failed (no credential returned)');
+      }
 
       setIssuedCredential(issueRes.credential);
 
@@ -209,6 +280,7 @@ sequenceDiagram
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verifierType: selectedVerifier,
+          walletType: selectedWallet,
           credential: issueRes.credential,
           format: selectedFormat,
           tamperConfig,
@@ -222,10 +294,12 @@ sequenceDiagram
         data: verifyData,
         expectedFail: tamperVector !== 'NONE' && verifyRes.status === 400
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Execution failure:', err);
+      setExecError(err?.message || String(err));
     } finally {
       setIsRunning(false);
+      fetchHistory();
     }
   }
 
@@ -239,15 +313,18 @@ sequenceDiagram
 
       setMatrixReport(res);
       setActiveTab('scorecard');
-      confetti({
-        particleCount: 120,
-        spread: 80,
-        origin: { y: 0.6 }
-      });
+      if (res?.summary?.compliancePercentage === 100) {
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.6 }
+        });
+      }
     } catch (e) {
       console.error(e);
     } finally {
       setIsRunning(false);
+      fetchHistory();
     }
   }
 
@@ -436,7 +513,7 @@ sequenceDiagram
                 <div style={{ fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   MOSIP Collab Inji Certify <span className="status-dot online"></span>
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>https://injicertify-mock.collab.mosip.net</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Live sandbox probe; falls back to local mock at the PMS auth boundary</div>
               </div>
             </label>
 
@@ -444,7 +521,7 @@ sequenceDiagram
               <input type="radio" name="issuer" checked={selectedIssuer === 'external-waltid'} onChange={() => setSelectedIssuer('external-waltid')} />
               <div>
                 <div style={{ fontSize: '13px', fontWeight: '600' }}>External Walt.id Issuer (Draft 14)</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Cross-Draft Transpiler Auto-Activated</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Simulated via local mock — Draft 13⇄14 transpiler demo</div>
               </div>
             </label>
           </div>
@@ -473,7 +550,7 @@ sequenceDiagram
               <input type="radio" name="wallet" checked={selectedWallet === 'inji-web'} onChange={() => setSelectedWallet('inji-web')} />
               <div>
                 <div style={{ fontSize: '13px', fontWeight: '600' }}>Inji Web Browser Bridge</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Mimoto session proxy & token vault</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Simulated — synthetic agent executes the flow</div>
               </div>
             </label>
 
@@ -481,7 +558,7 @@ sequenceDiagram
               <input type="radio" name="wallet" checked={selectedWallet === 'inji-mobile'} onChange={() => setSelectedWallet('inji-mobile')} />
               <div>
                 <div style={{ fontSize: '13px', fontWeight: '600' }}>Inji Mobile QR Bridge</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Claim-169 openid4vp://?request_uri=...</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Simulated — synthetic agent executes the flow</div>
               </div>
             </label>
           </div>
@@ -512,7 +589,7 @@ sequenceDiagram
                 <div style={{ fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   MOSIP Collab Inji Verify <span className="status-dot online"></span>
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>https://injiverify.collab.mosip.net</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Live sandbox probe; falls back to local mock verifier</div>
               </div>
             </label>
           </div>
@@ -560,14 +637,14 @@ sequenceDiagram
             }}
           >
             <option value="NONE">Disabled (Happy Path Conformance)</option>
-            <option value="VEC-01">VEC-01: Issuer Signature Bit-Flip (400 - INVALID_ISSUER_SIGNATURE)</option>
-            <option value="VEC-02">VEC-02: Key Binding Nonce Mismatch (400 - NONCE_MISMATCH)</option>
-            <option value="VEC-03">VEC-03: Strip Disclosure / sd_hash Desync (400 - SD_HASH_MISMATCH)</option>
-            <option value="VEC-04">VEC-04: Presentation Replay Attack (400 - JTI_ALREADY_CONSUMED)</option>
-            <option value="VEC-05">VEC-05: Expired Credential Presentation (400 - CREDENTIAL_EXPIRED)</option>
-            <option value="VEC-06">VEC-06: Malformed Recursive SD Nesting (400 - MALFORMED_RECURSIVE_SD)</option>
-            <option value="VEC-07">VEC-07: INJIVER-1131 Credential Type Mismatch (400 - CREDENTIAL_TYPE_MISMATCH)</option>
-            <option value="VEC-08">VEC-08: ASN.1 DER Signature Transcoding (400 - INVALID_SIGNATURE_ENCODING)</option>
+            <option value="VEC-01">VEC-01: Issuer Signature Bit-Flip (400 - ERR_INVALID_ES256_SIGNATURE)</option>
+            <option value="VEC-02">VEC-02: Key Binding IAT Backdating (400 - ERR_KB_JWT_IAT_OUTSIDE_SKEW_WINDOW)</option>
+            <option value="VEC-03">VEC-03: Cut-and-Paste sd_hash Desync (400 - ERR_KB_SD_HASH_MISMATCH)</option>
+            <option value="VEC-04">VEC-04: Unbound Disclosure Injection (400 - ERR_UNBOUND_DISCLOSURE_DIGEST)</option>
+            <option value="VEC-05">VEC-05: Expired Credential Presentation (400 - ERR_CREDENTIAL_EXPIRED)</option>
+            <option value="VEC-06">VEC-06: Malformed Recursive SD Nesting (400 - ERR_RECURSIVE_SD_NESTING_LIMIT_EXCEEDED)</option>
+            <option value="VEC-07">VEC-07: INJIVER-1131 Credential Type Mismatch (400 - ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE)</option>
+            <option value="VEC-08">VEC-08: ASN.1 DER Signature Injection (400 - ERR_NON_P1363_SIGNATURE_LENGTH)</option>
           </select>
 
           {tamperVector !== 'NONE' && (
@@ -616,8 +693,8 @@ sequenceDiagram
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                 {verificationResult.expectedFail
-                  ? `Inji Verify correctly detected and rejected ${tamperVector} (${verificationResult.data.error_description || verificationResult.data.error || 'invalid_presentation'})`
-                  : `Subject: ${verificationResult.data.subject || 'National ID'} • Format: ${verificationResult.data.format || selectedFormat} • sd_hash Verified: ${verificationResult.data.sd_hash_verified ? 'TRUE' : 'FALSE'}`}
+                  ? `Inji Verify correctly detected and rejected ${tamperVector} (${verificationResult.data.result?.error_description || verificationResult.data.error_description || verificationResult.data.result?.error || verificationResult.data.error || 'invalid_presentation'})`
+                  : `Subject: ${verificationResult.data.result?.subject || verificationResult.data.subject || 'National ID'} • Format: ${verificationResult.data.result?.format || verificationResult.data.format || selectedFormat} • sd_hash Verified: ${(verificationResult.data.result?.sd_hash_verified || verificationResult.data.sd_hash_verified) ? 'TRUE' : 'FALSE'}`}
               </div>
             </div>
           </div>
@@ -627,6 +704,28 @@ sequenceDiagram
               <ExternalLink size={14} /> Export GitHub Bug Report
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Execution Error Banner */}
+      {execError && (
+        <div className="glass-panel" style={{
+          padding: '14px 20px',
+          marginBottom: '24px',
+          borderLeft: '4px solid var(--accent-rose)',
+          background: 'rgba(244, 63, 94, 0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <XCircle size={24} color="var(--accent-rose)" />
+            <div>
+              <div style={{ fontWeight: '700', fontSize: '14px', color: 'var(--accent-rose)' }}>ORCHESTRATION ERROR</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{execError}</div>
+            </div>
+          </div>
+          <button className="btn-cyber-outline" onClick={() => setExecError(null)} style={{ fontSize: '12px', padding: '6px 12px' }}>Dismiss</button>
         </div>
       )}
 
@@ -753,6 +852,26 @@ sequenceDiagram
           >
             <Award size={16} /> Conformance Scorecard
           </button>
+
+          <button
+            onClick={() => { setActiveTab('history'); fetchHistory(); }}
+            style={{
+              padding: '14px 20px',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === 'history' ? '2px solid var(--accent-cyan)' : '2px solid transparent',
+              color: activeTab === 'history' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '13px',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <Clock size={16} /> Run History ({historyRuns.length})
+          </button>
         </div>
 
         {/* Tab 1: Token Anatomy & Selective Disclosure */}
@@ -790,7 +909,9 @@ sequenceDiagram
                         <div key={i} style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(52, 211, 153, 0.25)', borderRadius: '8px', padding: '12px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                             <strong style={{ color: 'var(--accent-emerald)', fontSize: '13px' }}>{d.key}</strong>
-                            <span className="badge badge-green">SHA-256 MATCH</span>
+                            <span className={`badge ${disclosureDigestState[d.rawBase64] === 'unbound' ? 'badge-red' : disclosureDigestState[d.rawBase64] === 'match' ? 'badge-green' : 'badge-amber'}`}>
+                              {disclosureDigestState[d.rawBase64] === 'unbound' ? 'UNBOUND DIGEST' : disclosureDigestState[d.rawBase64] === 'match' ? 'SHA-256 MATCH' : 'VERIFYING…'}
+                            </span>
                           </div>
                           <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '6px' }}>{String(d.value)}</div>
                           <div style={{ fontSize: '10px', color: 'var(--text-dim)', wordBreak: 'break-all' }}>
@@ -1134,11 +1255,17 @@ sequenceDiagram
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid var(--border-subtle)' }}>
                   <div>
-                    <h3 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--accent-emerald)', margin: 0 }}>
-                      100% CONFORMANCE CERTIFIED
+                    <h3 style={{
+                      fontSize: '18px', fontWeight: '800', margin: 0,
+                      color: matrixReport.summary.compliancePercentage === 100 ? 'var(--accent-emerald)' : 'var(--accent-rose)'
+                    }}>
+                      {matrixReport.summary.compliancePercentage === 100
+                        ? '100% CONFORMANCE CERTIFIED'
+                        : `${matrixReport.summary.compliancePercentage}% CONFORMANCE — ${matrixReport.summary.failed} LANE(S) FAILED`}
                     </h3>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      All {matrixReport.results.length} combinatorial interoperability and adversarial chaos vectors passed.
+                      {matrixReport.summary.passed} of {matrixReport.results.length} combinatorial interoperability lanes passed
+                      {matrixReport.summary.failed > 0 ? ' — failing lanes are listed below and must be remediated before certification.' : '.'}
                     </p>
                   </div>
                   <img src={matrixReport.summary.conformanceBadge} alt="Conformance Badge" />
@@ -1167,7 +1294,7 @@ sequenceDiagram
                           <span className="badge badge-blue">{r.draft}</span>
                         </td>
                         <td style={{ padding: '10px 14px' }}>
-                          <span style={{ color: 'var(--accent-emerald)', fontWeight: '700' }}>{r.outcome}</span>
+                          <span style={{ color: r.outcome === 'PASS' ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: '700' }}>{r.outcome}</span>
                         </td>
                         <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{r.latencyMs} ms</td>
                       </tr>
@@ -1178,6 +1305,113 @@ sequenceDiagram
             ) : (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                 Click "Run Judge Conformance Matrix" in the top bar to run the automated scorecard.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 7: Historical Test Runs (FEAT-11 / SQLite WAL) */}
+        {activeTab === 'history' && (
+          <div style={{ padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h3 style={{ fontSize: '16px', fontWeight: '700', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Database size={18} color="var(--accent-cyan)" /> SQLite WAL Conformance Audit History
+                </h3>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  All lifecycle runs, negative vectors, and matrix executions recorded in native node:sqlite (WAL mode).
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  value={historyFilterFormat}
+                  onChange={(e) => setHistoryFilterFormat(e.target.value)}
+                  style={{ background: 'var(--bg-card)', color: '#fff', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                >
+                  <option value="ALL">All Formats</option>
+                  <option value="vc+sd-jwt">vc+sd-jwt</option>
+                  <option value="dc+sd-jwt">dc+sd-jwt</option>
+                  <option value="ldp_vc">ldp_vc</option>
+                  <option value="mso_mdoc">mso_mdoc</option>
+                </select>
+                <select
+                  value={historyFilterStatus}
+                  onChange={(e) => setHistoryFilterStatus(e.target.value)}
+                  style={{ background: 'var(--bg-card)', color: '#fff', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                >
+                  <option value="ALL">All Outcomes</option>
+                  <option value="VERIFIED_PASS">VERIFIED_PASS</option>
+                  <option value="REJECTED">REJECTED</option>
+                  <option value="ISSUED">ISSUED</option>
+                </select>
+                <button
+                  onClick={fetchHistory}
+                  disabled={historyLoading}
+                  className="btn-cyber-outline"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <RefreshCw size={14} className={historyLoading ? 'spin' : ''} /> Refresh
+                </button>
+              </div>
+            </div>
+
+            {historyRuns.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                No historical runs recorded yet. Execute an end-to-end lifecycle flow or the Judge Matrix to record audit logs.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                      <th style={{ padding: '10px 12px' }}>Timestamp</th>
+                      <th style={{ padding: '10px 12px' }}>Issuer</th>
+                      <th style={{ padding: '10px 12px' }}>Verifier</th>
+                      <th style={{ padding: '10px 12px' }}>Format</th>
+                      <th style={{ padding: '10px 12px' }}>Tamper Vector</th>
+                      <th style={{ padding: '10px 12px' }}>Latency</th>
+                      <th style={{ padding: '10px 12px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyRuns
+                      .filter(r => historyFilterFormat === 'ALL' || r.format === historyFilterFormat)
+                      .filter(r => historyFilterStatus === 'ALL' || r.status.includes(historyFilterStatus))
+                      .map((run, idx) => {
+                        const isPass = run.status === 'VERIFIED_PASS' || run.status === 'ISSUED';
+                        return (
+                          <tr key={run.id || idx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.05)', background: idx % 2 === 0 ? 'rgba(255, 255, 255, 0.01)' : 'transparent' }}>
+                            <td style={{ padding: '10px 12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                              {new Date(run.timestamp).toLocaleTimeString()}
+                            </td>
+                            <td style={{ padding: '10px 12px', fontWeight: '500' }}>{run.issuer_type}</td>
+                            <td style={{ padding: '10px 12px', fontWeight: '500' }}>{run.verifier_type}</td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <span style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(6, 182, 212, 0.12)', color: 'var(--accent-cyan)', fontSize: '11px', fontWeight: '600' }}>
+                                {run.format}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 12px', color: run.tamper_applied !== 'NONE' ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                              {run.tamper_applied || 'NONE'}
+                            </td>
+                            <td style={{ padding: '10px 12px', fontFamily: 'monospace' }}>{run.latency_ms}ms</td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <span style={{
+                                padding: '3px 10px',
+                                borderRadius: '12px',
+                                fontSize: '11px',
+                                fontWeight: '700',
+                                background: isPass ? 'rgba(16, 185, 129, 0.15)' : 'rgba(244, 63, 94, 0.15)',
+                                color: isPass ? 'var(--accent-emerald)' : 'var(--accent-rose)'
+                              }}>
+                                {run.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

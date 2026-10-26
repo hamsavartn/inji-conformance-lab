@@ -1,16 +1,28 @@
 name: Inji Interop Lab CI
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 jobs:
   run-matrix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Start Docker Compose
         run: docker compose up -d
-      - name: Wait for Healthchecks
-        run: sleep 15
+      - name: Wait for Service Health (fail-closed probe)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/api/v1/health > /dev/null && \
+               curl -sf http://localhost:8080/health > /dev/null && \
+               curl -sf http://localhost:8081/health > /dev/null; then
+              echo "All services healthy."; exit 0
+            fi
+            echo "Waiting for services (${i}/30)..."; sleep 2
+          done
+          echo "Services failed to become healthy in time."; exit 1
       - name: Execute Runner
         run: bash scripts/cli_interop_runner.sh
       - name: Post Job Summary

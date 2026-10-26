@@ -11,19 +11,230 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const { decode: cborDecode, encode: cborEncode } = require('cbor-x');
 
 const app = express();
 const PORT = process.env.PORT || 8081;
 const VERIFIER_URL = process.env.VERIFIER_URL || process.env.VERIFIER_BASE_URL || `http://localhost:${PORT}`;
 
 app.use(cors());
-// 5MB limit and 10000 parameterLimit to prevent truncation of biometric Claim-169 and mDoc CBOR
-app.use(express.urlencoded({ extended: true, limit: '5mb', parameterLimit: 10000 }));
+
+// Concurrency semaphore on large payload ingestion to prevent V8 heap OOM (VULN-05, VULN-11)
+let activeLargeUploads = 0;
+const MAX_CONCURRENT_UPLOADS = 4;
+app.use('/direct_post', (req, res, next) => {
+  const contentLen = parseInt(req.headers['content-length'] || '0', 10);
+  if (contentLen > 5 * 1024 * 1024) {
+    return res.status(413).json({
+      type: 'https://mosip.io/errors/http/payload-too-large',
+      title: 'Payload Too Large',
+      status: 413,
+      code: 'ERR_BUFFER_OVERFLOW_BLOCKED'
+    });
+  }
+  if (contentLen > 256 * 1024) {
+    if (activeLargeUploads >= MAX_CONCURRENT_UPLOADS) {
+      return res.status(429).json({ error: 'too_many_requests', detail: 'Concurrent large payload limit reached' });
+    }
+    activeLargeUploads++;
+    res.on('close', () => { activeLargeUploads = Math.max(0, activeLargeUploads - 1); });
+  }
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: false, limit: '5mb', parameterLimit: 100 }));
 
 // In-memory verification sessions
 const activeSessions = new Map();
 const CLOCK_SKEW_TOLERANCE_SEC = 300; // 5 minutes per RFC 7519 / FAPI 2.0
+const SESSION_TTL_MS = 300000;
+const SESSION_SWEEP_INTERVAL_MS = 60000;
+const SESSION_MAP_HARD_CAP = 5000;
+
+// Periodic sweep so abandoned sessions cannot grow the map without bound
+const sessionSweeper = setInterval(() => {
+  const cutoff = Date.now() - SESSION_TTL_MS;
+  for (const [nonce, session] of activeSessions) {
+    if (session.createdAt < cutoff) activeSessions.delete(nonce);
+  }
+}, SESSION_SWEEP_INTERVAL_MS);
+if (typeof sessionSweeper.unref === 'function') sessionSweeper.unref();
+
+// Trusted Issuer Registry & Key Cache (draft-ietf-oauth-sd-jwt-vc §3.5 / §4)
+const TRUSTED_ISSUERS = new Set([
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
+  'http://mock-certify:8080',
+  'https://injicertify-mock.collab.mosip.net',
+  'https://api.collab.mosip.net/v1/mimoto'
+]);
+if (process.env.ISSUER_URL) {
+  TRUSTED_ISSUERS.add(process.env.ISSUER_URL.replace(/\/+$/, ''));
+}
+if (process.env.MOCK_CERTIFY_URL) {
+  TRUSTED_ISSUERS.add(process.env.MOCK_CERTIFY_URL.replace(/\/+$/, ''));
+}
+
+const issuerJwksCache = new Map();
+
+async function resolveTrustedIssuerJwk(iss, kid) {
+  if (!iss) {
+    throw new Error('ERR_MISSING_ISSUER: Credential payload missing iss claim');
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(iss);
+  } catch (e) {
+    throw new Error(`ERR_MALFORMED_ISSUER_URL: '${iss}' is not a valid URL`);
+  }
+
+  // Prevent userinfo injection (@) SSRF tricks (e.g. http://localhost:8080@evil.attacker.example)
+  if (parsedUrl.username || parsedUrl.password) {
+    throw new Error(`ERR_UNTRUSTED_ISSUER: URL userinfo (@) syntax rejected in iss '${iss}'`);
+  }
+
+  // Strict canonical origin + pathname matching against TRUSTED_ISSUERS
+  const canonicalPath = (parsedUrl.pathname && parsedUrl.pathname !== '/')
+    ? parsedUrl.pathname.replace(/\/+$/, '')
+    : '';
+  const normalizedIss = `${parsedUrl.origin}${canonicalPath}`;
+  if (!TRUSTED_ISSUERS.has(normalizedIss)) {
+    throw new Error(`ERR_UNTRUSTED_ISSUER: Issuer '${iss}' is not in the trusted registry`);
+  }
+
+  // Check in-memory cache
+  const cached = issuerJwksCache.get(normalizedIss);
+  if (cached && (Date.now() - cached.fetchedAt < 60000)) {
+    if (kid) {
+      const match = cached.keys.find(k => k.kid === kid);
+      if (!match) {
+        throw new Error(`ERR_ISSUER_KID_NOT_FOUND: Key ID '${kid}' not found in trusted issuer JWKS`);
+      }
+      return match;
+    }
+    if (cached.keys.length > 0) return cached.keys[0];
+  }
+
+  // Fetch from issuer /.well-known/jwks.json
+  try {
+    const jwksUrl = `${normalizedIss}/.well-known/jwks.json`;
+    const res = await fetch(jwksUrl, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.keys) && data.keys.length > 0) {
+        issuerJwksCache.set(normalizedIss, { keys: data.keys, fetchedAt: Date.now() });
+        if (kid) {
+          const match = data.keys.find(k => k.kid === kid);
+          if (!match) {
+            throw new Error(`ERR_ISSUER_KID_NOT_FOUND: Key ID '${kid}' not found in trusted issuer JWKS`);
+          }
+          return match;
+        }
+        return data.keys[0];
+      }
+    }
+  } catch (e) {
+    if (e.message.includes('ERR_ISSUER_KID_NOT_FOUND')) throw e;
+    if (cached && cached.keys.length > 0) {
+      if (kid) {
+        const match = cached.keys.find(k => k.kid === kid);
+        if (!match) {
+          throw new Error(`ERR_ISSUER_KID_NOT_FOUND: Key ID '${kid}' not found in trusted issuer JWKS`);
+        }
+        return match;
+      }
+      return cached.keys[0];
+    }
+  }
+
+  throw new Error(`ERR_UNTRUSTED_ISSUER_KEY: Unable to resolve valid signing key for trusted issuer '${iss}'`);
+}
+
+// Cryptographic Curve Order & Normalization Constants (VULN-01)
+const P256_ORDER = BigInt('0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551');
+const P256_HALF_ORDER = P256_ORDER / 2n;
+
+function normalizeLowS(sBuffer, componentByteLength = 32) {
+  let sVal = BigInt('0x' + (sBuffer.length > 0 ? sBuffer.toString('hex') : '0'));
+  if (sVal > P256_HALF_ORDER) {
+    sVal = P256_ORDER - sVal;
+  }
+  let sHex = sVal.toString(16);
+  if (sHex.length % 2 !== 0) sHex = '0' + sHex;
+  const rawS = Buffer.from(sHex, 'hex');
+  if (rawS.length > componentByteLength) {
+    throw new Error('ERR_SCALAR_OVERFLOW_AFTER_NORMALIZATION');
+  }
+  const paddedS = Buffer.alloc(componentByteLength, 0);
+  rawS.copy(paddedS, componentByteLength - rawS.length);
+  return paddedS;
+}
+
+function convertDerToP1363(derSig, componentByteLength = 32) {
+  const buf = Buffer.isBuffer(derSig) ? derSig : Buffer.from(derSig);
+  if (buf.length < 8 || buf[0] !== 0x30) {
+    throw new Error('ERR_ASN1_DER_INVALID_SEQUENCE_TAG');
+  }
+  let offset = 1;
+  let seqLen = buf[offset++];
+  if (seqLen & 0x80) {
+    const nBytes = seqLen & 0x7f;
+    if (nBytes !== 1 || offset >= buf.length) throw new Error('ERR_ASN1_DER_INVALID_LENGTH');
+    seqLen = buf[offset++];
+  }
+  if (offset + seqLen !== buf.length) {
+    throw new Error('ERR_ASN1_DER_LENGTH_MISMATCH');
+  }
+  const readInt = () => {
+    if (offset + 2 > buf.length || buf[offset++] !== 0x02) {
+      throw new Error('ERR_ASN1_DER_EXPECTED_INTEGER_TAG');
+    }
+    const len = buf[offset++];
+    if (len <= 0 || offset + len > buf.length) {
+      throw new Error('ERR_ASN1_DER_INTEGER_OUT_OF_BOUNDS');
+    }
+    let intSlice = buf.subarray(offset, offset + len);
+    offset += len;
+    while (intSlice.length > 0 && intSlice[0] === 0x00) {
+      intSlice = intSlice.subarray(1);
+    }
+    if (intSlice.length > componentByteLength) {
+      throw new Error('ERR_ASN1_DER_SCALAR_OVERFLOW');
+    }
+    return intSlice;
+  };
+  const r = readInt();
+  const sRaw = readInt();
+  if (offset !== buf.length) {
+    throw new Error('ERR_ASN1_DER_TRAILING_GARBAGE');
+  }
+  const rPadded = Buffer.alloc(componentByteLength, 0);
+  r.copy(rPadded, componentByteLength - r.length);
+  const sNormalized = normalizeLowS(sRaw, componentByteLength);
+  return Buffer.concat([rPadded, sNormalized]);
+}
+
+/**
+ * Deterministic JSON Canonicalization & W3C LD-Proof Input Hasher (VULN-09).
+ */
+function canonicalizeJsonDeterministic(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalizeJsonDeterministic).join(',')}]`;
+  const sortedKeys = Object.keys(value).sort();
+  return `{${sortedKeys.map((k) => `${JSON.stringify(k)}:${canonicalizeJsonDeterministic(value[k])}`).join(',')}}`;
+}
+
+function computeLdpSigningInput(vcDocument, proofOptions) {
+  const docClone = { ...vcDocument };
+  delete docClone.proof;
+  const proofClone = { ...proofOptions };
+  delete proofClone.proofValue;
+  delete proofClone.jws;
+  const proofHash = crypto.createHash('sha256').update(canonicalizeJsonDeterministic(proofClone), 'utf8').digest();
+  const docHash = crypto.createHash('sha256').update(canonicalizeJsonDeterministic(docClone), 'utf8').digest();
+  return Buffer.concat([proofHash, docHash]);
+}
 
 function toBase64Url(input) {
   const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input), 'utf8');
@@ -40,6 +251,7 @@ function sha256Base64Url(asciiString) {
 
 /**
  * Strict JWS verification supporting 64-byte IEEE P1363 ES256 and EdDSA.
+ * Requires explicit trusted public key; never trusts unauthenticated header.jwk.
  */
 function verifyJwsFlexible(compactJws, publicJwkOverride) {
   const parts = String(compactJws).split('.');
@@ -51,9 +263,9 @@ function verifyJwsFlexible(compactJws, publicJwkOverride) {
   const sigBuf = Buffer.from(sB64, 'base64url');
   const signingInput = Buffer.from(`${hB64}.${pB64}`, 'ascii');
 
-  const keyJwk = publicJwkOverride || header.jwk;
+  const keyJwk = publicJwkOverride;
   if (!keyJwk && header.alg !== 'none') {
-    throw new Error('ERR_MISSING_PUBLIC_JWK');
+    throw new Error('ERR_UNTRUSTED_KEY: No trusted public key provided for verification');
   }
 
   if (header.alg === 'none') {
@@ -327,6 +539,10 @@ function generateAuthRequestHandler(req, res) {
   };
 
   const requestUri = `${VERIFIER_URL}/requests/${nonce}`;
+  if (activeSessions.size >= SESSION_MAP_HARD_CAP) {
+    const oldest = activeSessions.keys().next().value;
+    if (oldest !== undefined) activeSessions.delete(oldest);
+  }
   activeSessions.set(nonce, {
     authRequest,
     status: 'PENDING',
@@ -354,7 +570,40 @@ app.get('/requests/:nonce', (req, res) => {
 });
 
 // OpenID4VP /direct_post Verification Endpoint
-app.post('/direct_post', (req, res) => {
+// DIF PE 2.0 field constraints declared by our authorization request: the verifier
+// requires UIN (12-digit national ID pattern) and fullName in every presentation.
+const REQUIRED_PRESENTED_CLAIMS = [
+  { name: 'UIN', paths: ['credentialSubject.UIN', 'vc.credentialSubject.UIN', 'UIN'], pattern: /^[0-9]{12}$/ },
+  { name: 'fullName', paths: ['credentialSubject.fullName', 'vc.credentialSubject.fullName', 'fullName'], pattern: null }
+];
+
+function resolveClaimPath(claims, dotPath) {
+  let cursor = claims;
+  for (const segment of dotPath.split('.')) {
+    if (cursor === null || typeof cursor !== 'object' || !(segment in cursor)) return undefined;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+function findMissingRequiredClaims(mergedClaims) {
+  const missing = [];
+  for (const req of REQUIRED_PRESENTED_CLAIMS) {
+    let value;
+    for (const p of req.paths) {
+      value = resolveClaimPath(mergedClaims, p);
+      if (value !== undefined) break;
+    }
+    if (value === undefined || value === null || value === '') {
+      missing.push(`${req.name} (not disclosed)`);
+    } else if (req.pattern && !req.pattern.test(String(value))) {
+      missing.push(`${req.name} (fails requested format ${req.pattern})`);
+    }
+  }
+  return missing;
+}
+
+app.post('/direct_post', async (req, res) => {
   const vpTokenRaw = req.body.vp_token;
   const presentationSubmissionRaw = req.body.presentation_submission;
 
@@ -371,33 +620,72 @@ app.post('/direct_post', (req, res) => {
   // Branch 1: SD-JWT Presentation (IETF RFC 9901 / draft-ietf-oauth-sd-jwt-vc)
   if (cleanToken.includes('~')) {
     try {
-      const segments = cleanToken.split('~');
-      if (segments.length < 2) {
+      const tokenStr = String(cleanToken);
+      const lastTildeIdx = tokenStr.lastIndexOf('~');
+      if (lastTildeIdx <= 0) {
         return res.status(400).json({
           error: 'invalid_presentation',
-          error_description: 'ERR_SD_JWT_MISSING_TILDE_DELIMITERS'
+          error_description: 'ERR_SD_JWT_INVALID_FORMAT_NO_TILDE'
         });
       }
 
-      const issuerJwt = segments[0];
-      const kbJwt = segments[segments.length - 1];
-      const disclosures = segments.slice(1, -1).filter(Boolean);
-
-      // Check if signature bit-flip tamper vector was applied
-      const jwtParts = issuerJwt.split('.');
-      if (jwtParts.length === 3 && (jwtParts[2].endsWith('Z') || jwtParts[2].includes('CORRUPT'))) {
+      const exactSignedPrefix = tokenStr.slice(0, lastTildeIdx + 1);
+      const kbJwt = tokenStr.slice(lastTildeIdx + 1);
+      if (!kbJwt) {
         return res.status(400).json({
-          error: 'invalid_signature',
-          error_description: 'ERR_INVALID_ES256_SIGNATURE: Cryptographic signature validation failed on Issuer JWT'
+          error: 'invalid_presentation',
+          error_description: 'ERR_MISSING_KEY_BINDING_JWT: Holder key binding proof required'
         });
       }
 
-      // 1. Verify Issuer-Signed JWT Header & Payload (VULN-09)
-      const { header: issHdr, payload: issPay } = verifyJwsFlexible(issuerJwt);
+      const prefixParts = tokenStr.slice(0, lastTildeIdx).split('~');
+      const issuerJwt = prefixParts[0];
+      const disclosures = prefixParts.slice(1);
+
+      // RFC 9901 §4: Reject any empty disclosure segment caused by consecutive '~~' (VULN-02)
+      for (const d of disclosures) {
+        if (d.length === 0) {
+          return res.status(400).json({
+            error: 'invalid_presentation',
+            error_description: 'ERR_SD_JWT_EMPTY_DISCLOSURE_SEGMENT: Empty disclosure segment prohibited by RFC 9901'
+          });
+        }
+      }
+
+      // 1. Resolve Issuer Key from Trust Registry & Verify Issuer-Signed JWT Header & Payload (VULN-09)
+      const parts = String(issuerJwt).split('.');
+      if (parts.length !== 3) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_MALFORMED_ISSUER_JWT'
+        });
+      }
+
+      let unverifiedHdr, unverifiedPay;
+      try {
+        unverifiedHdr = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+        unverifiedPay = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+      } catch (e) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_INVALID_ISSUER_JWT_JSON'
+        });
+      }
+
+      const trustedIssuerJwk = await resolveTrustedIssuerJwk(unverifiedPay.iss, unverifiedHdr.kid);
+      const { header: issHdr, payload: issPay } = verifyJwsFlexible(issuerJwt, trustedIssuerJwk);
       if (!['vc+sd-jwt', 'dc+sd-jwt'].includes(issHdr.typ)) {
         return res.status(400).json({
           error: 'invalid_presentation',
           error_description: `ERR_INVALID_SD_JWT_TYP_${issHdr.typ}: Must be vc+sd-jwt or dc+sd-jwt`
+        });
+      }
+
+      // RFC 9901 _sd_alg check (VULN-02)
+      if (issPay._sd_alg && issPay._sd_alg !== 'sha-256') {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_UNSUPPORTED_SD_ALG_${issPay._sd_alg}: Only sha-256 is supported`
         });
       }
 
@@ -447,14 +735,6 @@ app.post('/direct_post', (req, res) => {
         }
         seenDisclosureDigests.add(digest);
 
-        // VEC-04: Unbound Disclosure rejection
-        if (!uniqueSdSet.has(digest)) {
-          return res.status(400).json({
-            error: 'invalid_presentation',
-            error_description: `ERR_UNBOUND_DISCLOSURE_DIGEST: Disclosure digest ${digest} not bound by issuer _sd`
-          });
-        }
-
         let decodedJson;
         try {
           decodedJson = JSON.parse(Buffer.from(rawDisclosure, 'base64url').toString('utf8'));
@@ -490,17 +770,18 @@ app.post('/direct_post', (req, res) => {
           }
         }
 
+        // VEC-04: Unbound Disclosure rejection
+        if (!uniqueSdSet.has(digest)) {
+          return res.status(400).json({
+            error: 'invalid_presentation',
+            error_description: `ERR_UNBOUND_DISCLOSURE_DIGEST: Disclosure digest ${digest} not bound by issuer _sd`
+          });
+        }
+
         disclosedClaims[claimName] = claimValue;
       }
 
       // 3. Mandatory Key Binding JWT (kb+jwt) & 'sd_hash' Verification (VULN-02, VEC-03)
-      if (!kbJwt) {
-        return res.status(400).json({
-          error: 'invalid_presentation',
-          error_description: 'ERR_MISSING_KEY_BINDING_JWT: Holder key binding proof required'
-        });
-      }
-
       const holderJwk = issPay.cnf?.jwk;
       if (!holderJwk) {
         return res.status(400).json({
@@ -517,25 +798,74 @@ app.post('/direct_post', (req, res) => {
         });
       }
 
-      if (kbPay.nonce && kbPay.nonce.includes('INVALID')) {
+      // Stateful Session Nonce Verification & Replay Protection (FINDING-03)
+      if (!kbPay.nonce) {
         return res.status(400).json({
-          error: 'invalid_presentation',
-          error_description: 'Key binding nonce mismatch or replayed presentation'
+          error: 'invalid_request',
+          error_description: 'ERR_MISSING_SESSION_NONCE: Key binding JWT must declare session nonce'
         });
       }
 
+      // RFC 9901 §5.3: kb+jwt audience MUST match the verifier's client_id (checked before
+      // any session state mutation so a bad audience never consumes the verifier nonce)
+      const audienceOk = Array.isArray(kbPay.aud)
+        ? kbPay.aud.includes(VERIFIER_URL)
+        : kbPay.aud === VERIFIER_URL;
+      if (!audienceOk) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_KB_JWT_AUD_MISMATCH: Key binding JWT audience '${kbPay.aud}' does not match this verifier's client_id '${VERIFIER_URL}'`
+        });
+      }
+
+      const session = activeSessions.get(kbPay.nonce);
+      if (!session) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation nonce is unknown or has expired'
+        });
+      }
+
+      if (session.status === 'CONSUMED' || session.status === 'PROCESSING') {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_NONCE_ALREADY_CONSUMED: Presentation nonce has already been consumed (replay detected)'
+        });
+      }
+
+      if (Date.now() - session.createdAt > 300000) {
+        activeSessions.delete(kbPay.nonce);
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation session has timed out'
+        });
+      }
+
+      session.status = 'PROCESSING';
+
       if (kbPay.iat !== undefined && Math.abs(now - kbPay.iat) > CLOCK_SKEW_TOLERANCE_SEC) {
+        session.status = 'PENDING';
         return res.status(400).json({
           error: 'invalid_presentation',
           error_description: 'ERR_KB_JWT_IAT_OUTSIDE_SKEW_WINDOW'
         });
       }
 
-      // VULN-02: Recompute sd_hash over '<issuerJwt>~<disclosure1>~...~<disclosureN>~'
-      const presentationWithoutKb = `${segments.slice(0, -1).join('~')}~`;
-      const expectedSdHash = sha256Base64Url(presentationWithoutKb);
+      // RFC 9901 §5.2: sd_hash is a REQUIRED claim of the Key Binding JWT. A kb+jwt
+      // without it is not bound to this specific presentation and must fail closed.
+      if (!kbPay.sd_hash || typeof kbPay.sd_hash !== 'string') {
+        session.status = 'PENDING';
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_MISSING_SD_HASH: Key binding JWT must declare the sd_hash claim (RFC 9901 §5.2)'
+        });
+      }
 
-      if (kbPay.sd_hash && kbPay.sd_hash !== expectedSdHash) {
+      // RFC 9901 Exact sd_hash calculation over exactSignedPrefix
+      const expectedSdHash = sha256Base64Url(exactSignedPrefix);
+
+      if (kbPay.sd_hash !== expectedSdHash) {
+        session.status = 'PENDING';
         return res.status(400).json({
           error: 'invalid_presentation',
           error_description: 'ERR_KB_SD_HASH_MISMATCH: Cut-and-paste disclosure tampering detected'
@@ -553,6 +883,7 @@ app.post('/direct_post', (req, res) => {
         'https://credentials.mosip.io/identity_credential'
       ];
       if (mergedClaims.vct && !validVcts.includes(mergedClaims.vct)) {
+        session.status = 'PENDING';
         return res.status(400).json({
           error: 'invalid_presentation',
           error_description: `ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE: Unexpected credential type ${mergedClaims.vct}`
@@ -563,6 +894,21 @@ app.post('/direct_post', (req, res) => {
       const extractedUin = mergedClaims.credentialSubject?.UIN
         || mergedClaims.vc?.credentialSubject?.UIN
         || mergedClaims.UIN;
+
+      // DIF PE 2.0 §6 / OpenID4VP: requested presentation fields (UIN + fullName) must be
+      // disclosed and satisfy the input_descriptors filter constraints
+      const missingRequired = findMissingRequiredClaims(mergedClaims);
+      if (missingRequired.length > 0) {
+        session.status = 'PENDING';
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_REQUIRED_CLAIM_NOT_DISCLOSED: Presentation does not satisfy the requested input_descriptors: ${missingRequired.join('; ')}`
+        });
+      }
+
+      // Mark session as successfully consumed to prevent replay attacks
+      session.status = 'CONSUMED';
+      session.consumedAt = Date.now();
 
       return res.json({
         status: 'OK',
@@ -592,11 +938,15 @@ app.post('/direct_post', (req, res) => {
   }
 
   if (vcObj && vcObj.proof) {
-    if (vcObj.proof.proofValue && (vcObj.proof.proofValue.endsWith('Z') || vcObj.proof.proofValue.includes('CORRUPT'))) {
-      return res.status(400).json({
-        error: 'invalid_signature',
-        error_description: 'W3C VC proofValue verification failed canonicalization check'
-      });
+    // Expiration check (VULN-09)
+    if (vcObj.expirationDate) {
+      const expTime = new Date(vcObj.expirationDate).getTime();
+      if (!isNaN(expTime) && (Date.now() - CLOCK_SKEW_TOLERANCE_SEC * 1000) > expTime) {
+        return res.status(400).json({
+          error: 'expired_credential',
+          error_description: 'ERR_CREDENTIAL_EXPIRED: W3C VC has expired beyond allowable clock skew'
+        });
+      }
     }
 
     // INJIVER-1131 type check for W3C VC
@@ -608,6 +958,94 @@ app.post('/direct_post', (req, res) => {
       });
     }
 
+    // Cryptographic Ed25519 signature verification (fail-closed: a missing trusted key or
+    // missing proofValue is a rejection, never a silent bypass)
+    if (!vcObj.proof.proofValue && !vcObj.proof.jws) {
+      return res.status(400).json({
+        error: 'invalid_signature',
+        error_description: 'ERR_MISSING_LDP_PROOF_VALUE: W3C VC proof carries no proofValue/jws to verify'
+      });
+    }
+    if (vcObj.proof.proofValue) {
+      try {
+        const rawProof = vcObj.proof.proofValue.startsWith('z') ? vcObj.proof.proofValue.slice(1) : vcObj.proof.proofValue;
+        const sigBuffer = Buffer.from(rawProof, 'base64url');
+        const issuerBase = String(vcObj.issuer || 'http://localhost:8080').replace(/\/+$/, '');
+        await resolveTrustedIssuerJwk(issuerBase);
+        const cached = issuerJwksCache.get(issuerBase);
+        const edKey = cached?.keys?.find(k => k.crv === 'Ed25519' || k.kty === 'OKP');
+        if (!edKey) {
+          return res.status(400).json({
+            error: 'invalid_signature',
+            error_description: `ERR_UNTRUSTED_ISSUER_KEY: Trusted issuer '${issuerBase}' publishes no Ed25519 verification key; refusing to verify ldp_vc proof`
+          });
+        }
+        const keyObj = crypto.createPublicKey({ key: edKey, format: 'jwk' });
+        const signingInput = computeLdpSigningInput(vcObj, vcObj.proof);
+        const valid = crypto.verify(null, signingInput, keyObj, sigBuffer);
+        if (!valid) {
+          return res.status(400).json({
+            error: 'invalid_signature',
+            error_description: 'ERR_INVALID_ED25519_PROOF_SIGNATURE: W3C VC Ed25519 signature verification failed'
+          });
+        }
+      } catch (err) {
+        return res.status(400).json({
+          error: 'invalid_signature',
+          error_description: `ERR_ED25519_VERIFICATION_FAILED: ${err.message}`
+        });
+      }
+    }
+
+    // Session Nonce & Replay Enforcement for ldp_vc presentations
+    let ldpSubmissionObj = null;
+    try {
+      if (presentationSubmissionRaw) {
+        ldpSubmissionObj = typeof presentationSubmissionRaw === 'string' ? JSON.parse(presentationSubmissionRaw) : presentationSubmissionRaw;
+      }
+    } catch (e) {}
+
+    const ldpNonce = req.body.nonce || req.query?.nonce || ldpSubmissionObj?.nonce || vcObj.proof?.challenge || vcObj.proof?.nonce;
+    if (!ldpNonce) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MISSING_SESSION_NONCE: W3C VC presentation requires a valid session nonce'
+      });
+    }
+
+    const session = activeSessions.get(ldpNonce);
+    if (!session) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation nonce is unknown or has expired'
+      });
+    }
+      if (session.status === 'CONSUMED' || session.status === 'PROCESSING') {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_NONCE_ALREADY_CONSUMED: Presentation nonce has already been consumed (replay detected)'
+        });
+      }
+      if (Date.now() - session.createdAt > 300000) {
+        activeSessions.delete(ldpNonce);
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation session has timed out'
+        });
+      }
+
+      // DIF PE 2.0: requested fields (UIN + fullName) must be present in the W3C VC too
+      const ldpMissing = findMissingRequiredClaims(vcObj);
+      if (ldpMissing.length > 0) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_REQUIRED_CLAIM_NOT_DISCLOSED: Presentation does not satisfy the requested input_descriptors: ${ldpMissing.join('; ')}`
+        });
+      }
+
+      session.status = 'CONSUMED';
+      session.consumedAt = Date.now();
+
     return res.json({
       status: 'OK',
       verification_result: 'SUCCESS',
@@ -618,11 +1056,198 @@ app.post('/direct_post', (req, res) => {
     });
   }
 
-  res.json({
-    status: 'OK',
-    verification_result: 'SUCCESS',
-    format: 'mso_mdoc',
-    message: 'Presentation accepted and verified'
+  // Branch 3: ISO/IEC 18013-5 mdoc (CBOR Tag 24)
+  let mdocObj = null;
+  let rawCborBuffer = null;
+  try {
+    if (Buffer.isBuffer(cleanToken)) {
+      rawCborBuffer = cleanToken;
+    } else if (typeof cleanToken === 'string') {
+      try {
+        rawCborBuffer = Buffer.from(cleanToken, 'base64url');
+      } catch (e) {
+        rawCborBuffer = Buffer.from(cleanToken, 'utf8');
+      }
+    }
+    if (rawCborBuffer && rawCborBuffer.length > 0) {
+      mdocObj = cborDecode(rawCborBuffer);
+    }
+  } catch (e) {
+    // Not valid CBOR
+  }
+
+  if (mdocObj && (mdocObj.docType === 'org.iso.18013.5.1.mDL' || (Array.isArray(mdocObj.documents) && mdocObj.documents[0]?.docType === 'org.iso.18013.5.1.mDL'))) {
+    const doc = mdocObj.docType ? mdocObj : mdocObj.documents[0];
+    const issuerSigned = doc.issuerSigned;
+    if (!issuerSigned || !issuerSigned.issuerAuth) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MALFORMED_MDOC: Missing issuerSigned or issuerAuth COSE_Sign1 structure'
+      });
+    }
+
+    const issuerAuth = issuerSigned.issuerAuth;
+    if (!Array.isArray(issuerAuth) || issuerAuth.length !== 4) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MALFORMED_COSE_SIGN1: Expected 4-element COSE_Sign1 array'
+      });
+    }
+
+    const [protectedHeadersBytes, unprotectedHeaders, payloadTag24, signatureBytes] = issuerAuth;
+    const msoBytes = (payloadTag24 && payloadTag24.value) ? payloadTag24.value : payloadTag24;
+
+    try {
+      const trustedIssuerJwk = await resolveTrustedIssuerJwk('http://localhost:8080', 'mosip-issuer-key-2026');
+      const sigStructure = ['Signature1', protectedHeadersBytes, Buffer.alloc(0), msoBytes];
+      const toBeSigned = cborEncode(sigStructure);
+      const keyObj = crypto.createPublicKey({ key: trustedIssuerJwk, format: 'jwk' });
+      const valid = crypto.verify(
+        'SHA256',
+        toBeSigned,
+        { key: keyObj, dsaEncoding: 'ieee-p1363' },
+        signatureBytes
+      );
+      if (!valid) {
+        return res.status(400).json({
+          error: 'invalid_signature',
+          error_description: 'ERR_INVALID_MDOC_SIGNATURE: COSE_Sign1 signature verification failed'
+        });
+      }
+    } catch (err) {
+      return res.status(400).json({
+        error: 'invalid_signature',
+        error_description: `ERR_MDOC_VERIFICATION_FAILED: ${err.message}`
+      });
+    }
+
+    // Decode MobileSecurityObject to verify valueDigests against disclosed nameSpaces
+    let msoObj;
+    try {
+      msoObj = cborDecode(msoBytes);
+    } catch (e) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MALFORMED_MSO: Unable to decode MobileSecurityObject'
+      });
+    }
+
+    const expectedNamespaceDigests = msoObj?.valueDigests?.['org.iso.18013.5.1'];
+    if (!expectedNamespaceDigests) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MALFORMED_MSO: Missing org.iso.18013.5.1 in valueDigests'
+      });
+    }
+
+    // Verify cryptographic SHA-256 hash for every attribute in nameSpaces (ISO/IEC 18013-5 §9.1.2.4)
+    const extractedClaims = {};
+    const items = issuerSigned.nameSpaces?.['org.iso.18013.5.1'] || [];
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_EMPTY_MDOC_NAMESPACES: No IssuerSignedItem elements found'
+      });
+    }
+
+    for (const itemTag of items) {
+      const rawItemBytes = (itemTag && itemTag.value) ? itemTag.value : (Buffer.isBuffer(itemTag) ? itemTag : cborEncode(itemTag));
+      const computedDigest = crypto.createHash('sha256').update(rawItemBytes).digest();
+
+      let itemObj;
+      try {
+        itemObj = (itemTag && itemTag.value) ? cborDecode(itemTag.value) : itemTag;
+      } catch (e) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_MALFORMED_ISSUER_SIGNED_ITEM: Cannot decode Tag 24 item'
+        });
+      }
+
+      if (!itemObj || typeof itemObj.digestID !== 'number' || !Number.isInteger(itemObj.digestID)) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: 'ERR_MALFORMED_ISSUER_SIGNED_ITEM: Missing or non-integer digestID in IssuerSignedItem'
+        });
+      }
+
+      let expectedDigest = expectedNamespaceDigests instanceof Map
+        ? expectedNamespaceDigests.get(itemObj.digestID)
+        : (expectedNamespaceDigests[itemObj.digestID] || expectedNamespaceDigests[String(itemObj.digestID)]);
+
+      if (!expectedDigest) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_UNBOUND_MDOC_DIGEST: Digest ID ${itemObj.digestID} not bound in MSO valueDigests`
+        });
+      }
+
+      const expectedBuf = Buffer.isBuffer(expectedDigest) ? expectedDigest : Buffer.from(expectedDigest);
+      if (!computedDigest.equals(expectedBuf)) {
+        return res.status(400).json({
+          error: 'invalid_presentation',
+          error_description: `ERR_MDOC_DIGEST_MISMATCH: Attribute '${itemObj.elementIdentifier}' does not match MSO valueDigest (tampering detected)`
+        });
+      }
+
+      if (itemObj.elementIdentifier) {
+        extractedClaims[itemObj.elementIdentifier] = itemObj.elementValue;
+      }
+    }
+
+    // Session Nonce & Replay Enforcement for mso_mdoc presentations (Fail-Closed)
+    let submissionObj = null;
+    try {
+      if (presentationSubmissionRaw) {
+        submissionObj = typeof presentationSubmissionRaw === 'string' ? JSON.parse(presentationSubmissionRaw) : presentationSubmissionRaw;
+      }
+    } catch (e) {}
+
+    const mdocNonce = req.body.nonce || req.query?.nonce || submissionObj?.nonce;
+    if (!mdocNonce) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_MISSING_SESSION_NONCE: mso_mdoc presentation requires a valid session nonce'
+      });
+    }
+
+    const session = activeSessions.get(mdocNonce);
+    if (!session) {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation nonce is unknown or has expired'
+      });
+    }
+    if (session.status === 'CONSUMED' || session.status === 'PROCESSING') {
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_NONCE_ALREADY_CONSUMED: Presentation nonce has already been consumed (replay detected)'
+      });
+    }
+    if (Date.now() - session.createdAt > 300000) {
+      activeSessions.delete(mdocNonce);
+      return res.status(400).json({
+        error: 'invalid_presentation',
+        error_description: 'ERR_UNKNOWN_OR_EXPIRED_SESSION_NONCE: Presentation session has timed out'
+      });
+    }
+    session.status = 'CONSUMED';
+    session.consumedAt = Date.now();
+
+    return res.json({
+      status: 'OK',
+      verification_result: 'SUCCESS',
+      format: 'mso_mdoc',
+      doctype: doc.docType,
+      issuer: 'http://localhost:8080',
+      claims: extractedClaims
+    });
+  }
+
+  // Universal Fallback: Reject any unparseable or unsupported payload with HTTP 400
+  return res.status(400).json({
+    error: 'invalid_presentation',
+    error_description: 'ERR_UNSUPPORTED_OR_MALFORMED_VP_TOKEN: Presentation payload does not match any supported format (vc+sd-jwt, dc+sd-jwt, ldp_vc, mso_mdoc)'
   });
 });
 
@@ -665,7 +1290,11 @@ app.use((req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[MOCK-VERIFY] Inji Verify OpenID4VP Mock listening on port ${PORT}`);
-  console.log(`[MOCK-VERIFY] Request generator: ${VERIFIER_URL}/api/v1/request`);
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[MOCK-VERIFY] Inji Verify OpenID4VP Mock listening on port ${PORT}`);
+    console.log(`[MOCK-VERIFY] Request generator: ${VERIFIER_URL}/api/v1/request`);
+  });
+}
+
+module.exports = { app, resolveTrustedIssuerJwk };

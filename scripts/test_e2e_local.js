@@ -16,14 +16,38 @@ async function runChainOfVerification() {
   console.log('   Testing 12 Audited Vulnerabilities & 8 Chaos Vectors         ');
   console.log('================================================================\n');
 
-  // Launch in-process servers
-  console.log('[INIT] Spawning Issuer Mock, Verifier Mock, and Hardened BFF...');
-  require('../mocks/issuer/server.js');
-  require('../mocks/verifier/server.js');
-  require('../backend/server.js');
-
-  // Allow 1.5s for HTTP listeners and SQLite database to bind
-  await new Promise(r => setTimeout(r, 1500));
+  // Launch in-process servers if not already listening
+  try {
+    const checkLive = await fetch('http://localhost:4000/api/v1/health', { signal: AbortSignal.timeout(500) });
+    if (checkLive.ok) {
+      console.log('[INIT] Connecting to live running microservices (4000/8080/8081)...');
+    }
+  } catch (e) {
+    console.log('[INIT] Starting Issuer Mock, Verifier Mock, and Hardened BFF in-process...');
+    // The service modules only auto-listen under require.main === module, so bind the
+    // exported servers here. EADDRINUSE is tolerated (a partially-running external
+    // service will serve that port instead).
+    const issuerApp = require('../mocks/issuer/server.js');
+    const verifierApp = require('../mocks/verifier/server.js');
+    const backendApp = require('../backend/server.js');
+    await new Promise((resolve) => {
+      let pending = 3;
+      const onDone = () => { if (--pending === 0) resolve(); };
+      const bind = (server, port, name) => {
+        server.once('error', (err) => {
+          if (err.code === 'EADDRINUSE') console.log(`[INIT] Port ${port} already in use (external ${name} assumed live).`);
+          else throw err;
+          onDone();
+        });
+        server.listen(port, onDone);
+      };
+      bind(issuerApp.app, 8080, 'issuer');
+      bind(verifierApp.app, 8081, 'verifier');
+      bind(backendApp.server, 4000, 'BFF');
+      setTimeout(resolve, 2500);
+    });
+    await new Promise(r => setTimeout(r, 800));
+  }
 
   const results = [];
   function assertCheck(id, description, passed, details = '') {
@@ -99,8 +123,8 @@ async function runChainOfVerification() {
     });
     const verifyTamperData = await verifyTamper.json();
     const tamperRejected = verifyTamper.status === 400 &&
-      (verifyTamperData.result?.error_description?.includes('SD_HASH_MISMATCH') || verifyTamperData.result?.error === 'invalid_presentation');
-    assertCheck('VULN-02b', 'Adversarial VEC-03 Rejection (sd_hash Mismatch Detected)', tamperRejected, `HTTP ${verifyTamper.status}`);
+      verifyTamperData.result?.error_description?.includes('ERR_KB_SD_HASH_MISMATCH');
+    assertCheck('VULN-02b', 'Adversarial VEC-03 Rejection (sd_hash Mismatch Detected)', tamperRejected, `HTTP ${verifyTamper.status} [${verifyTamperData.result?.error_description || ''}]`);
   } catch (e) {
     assertCheck('VULN-02', 'RFC 9901 sd_hash Key Binding Integrity', false, e.message);
   }
@@ -244,8 +268,8 @@ async function runChainOfVerification() {
 
     const verifyWrongData = await verifyWrongType.json();
     const typeMismatchCaught = verifyWrongType.status === 400 &&
-      (verifyWrongData.result?.error_description?.includes('ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE') || verifyWrongData.result?.error === 'invalid_presentation');
-    assertCheck('VULN-08', 'INJIVER-1131 Defect Mitigation: Strict RP Credential Type Assertions', typeMismatchCaught, `HTTP ${verifyWrongType.status}`);
+      verifyWrongData.result?.error_description?.includes('ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE');
+    assertCheck('VULN-08', 'INJIVER-1131 Defect Mitigation: Strict RP Credential Type Assertions', typeMismatchCaught, `HTTP ${verifyWrongType.status} [${verifyWrongData.result?.error_description || ''}]`);
   } catch (e) {
     assertCheck('VULN-08', 'INJIVER-1131 Defect Mitigation', false, e.message);
   }
@@ -326,17 +350,18 @@ async function runChainOfVerification() {
 
   // -------------------------------------------------------------------------
   // CHECK 12: Complete 8-Vector Adversarial Chaos Monkey Suite (VEC-01 to VEC-08)
+  // Hardened with strict cryptographic error code assertions (AUDIT-VULN-13)
   // -------------------------------------------------------------------------
   console.log('\n--- Executing 8-Layer Adversarial Chaos Monkey Test Suite ---');
   const chaosVectors = [
-    { id: 'VEC-01', desc: 'Issuer Signature Bit-Flip' },
-    { id: 'VEC-02', desc: 'Key Binding Nonce Mismatch' },
-    { id: 'VEC-03', desc: 'Cut-and-Paste sd_hash Desync' },
-    { id: 'VEC-04', desc: 'Unbound Disclosure Injection' },
-    { id: 'VEC-05', desc: 'Expired Credential Presentation' },
-    { id: 'VEC-06', desc: 'Malformed Recursive SD Nesting Loop' },
-    { id: 'VEC-07', desc: 'INJIVER-1131 Credential Type Mismatch' },
-    { id: 'VEC-08', desc: 'ASN.1 DER Signature Injection' }
+    { id: 'VEC-01', desc: 'Issuer Signature Bit-Flip', expectedErrorCode: 'ERR_INVALID_ES256_SIGNATURE' },
+    { id: 'VEC-02', desc: 'Key Binding Nonce/IAT Mismatch', expectedErrorCode: 'ERR_KB_JWT_IAT_OUTSIDE_SKEW_WINDOW' },
+    { id: 'VEC-03', desc: 'Cut-and-Paste sd_hash Desync', expectedErrorCode: 'ERR_KB_SD_HASH_MISMATCH' },
+    { id: 'VEC-04', desc: 'Unbound Disclosure Injection', expectedErrorCode: 'ERR_UNBOUND_DISCLOSURE_DIGEST' },
+    { id: 'VEC-05', desc: 'Expired Credential Presentation', expectedErrorCode: 'ERR_CREDENTIAL_EXPIRED' },
+    { id: 'VEC-06', desc: 'Malformed Recursive SD Nesting Loop', expectedErrorCode: 'ERR_RECURSIVE_SD_NESTING_LIMIT_EXCEEDED' },
+    { id: 'VEC-07', desc: 'INJIVER-1131 Credential Type Mismatch', expectedErrorCode: 'ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE' },
+    { id: 'VEC-08', desc: 'ASN.1 DER Signature Injection', expectedErrorCode: 'ERR_NON_P1363_SIGNATURE_LENGTH' }
   ];
 
   for (const cv of chaosVectors) {
@@ -362,8 +387,17 @@ async function runChainOfVerification() {
         })
       });
 
-      const rejected = verifyRes.status === 400;
-      assertCheck(cv.id, `Adversarial Vector ${cv.id} (${cv.desc})`, rejected, `HTTP ${verifyRes.status} Rejection Confirmed`);
+      const body = await verifyRes.json();
+      const errDesc = body.result?.error_description || body.result?.error || body.error_description || body.error || '';
+      const codeMatched = errDesc.includes(cv.expectedErrorCode) || (cv.id === 'VEC-08' && (errDesc.includes('ERR_NON_P1363_SIGNATURE_LENGTH') || errDesc.includes('ERR_INVALID_ES256_SIGNATURE')));
+      const rejected = verifyRes.status === 400 && codeMatched;
+
+      assertCheck(
+        cv.id,
+        `Adversarial Vector ${cv.id} (${cv.desc}) [${cv.expectedErrorCode}]`,
+        rejected,
+        `HTTP ${verifyRes.status} [${errDesc.slice(0, 45)}...]`
+      );
     } catch (e) {
       assertCheck(cv.id, `Adversarial Vector ${cv.id} (${cv.desc})`, false, e.message);
     }
@@ -405,6 +439,157 @@ async function runChainOfVerification() {
     assertCheck('FEATURE-2', 'OpenID4VP DCQL Transpiler (DIF PE 2.0 ⇄ DCQL Query)', hasDcql, 'Transpiled to Draft 23 DCQL Format');
   } catch (e) {
     assertCheck('FEATURE-2', 'OpenID4VP DCQL Transpiler', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // CHECK 15: REGRESSION-01 - Rogue Self-Signed header.jwk Rejection Test
+  // -------------------------------------------------------------------------
+  try {
+    const rogueKeyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const rogueJwk = rogueKeyPair.publicKey.export({ format: 'jwk' });
+    rogueJwk.kid = 'rogue-key-999';
+
+    const reqRes = await fetch('http://localhost:8081/api/v1/request').then(r => r.json());
+    const now = Math.floor(Date.now() / 1000);
+
+    const rogueHeader = { alg: 'ES256', typ: 'vc+sd-jwt', jwk: rogueJwk, kid: 'rogue-key-999' };
+    const roguePayload = {
+      iss: 'http://malicious-attacker.com',
+      sub: 'did:jwk:holder-1',
+      iat: now,
+      exp: now + 3600,
+      vct: 'urn:mosip:id:national-id',
+      _sd: [],
+      _sd_alg: 'sha-256',
+      cnf: { jwk: rogueJwk }
+    };
+
+    const encH = Buffer.from(JSON.stringify(rogueHeader)).toString('base64url');
+    const encP = Buffer.from(JSON.stringify(roguePayload)).toString('base64url');
+    const signingInput = `${encH}.${encP}`;
+    const rawSig = crypto.sign('SHA256', Buffer.from(signingInput, 'ascii'), { key: rogueKeyPair.privateKey, dsaEncoding: 'ieee-p1363' });
+    const rogueJwt = `${signingInput}.${rawSig.toString('base64url')}`;
+    const rogueSdJwtPrefix = `${rogueJwt}~`;
+    const sdHash = crypto.createHash('sha256').update(rogueSdJwtPrefix, 'ascii').digest('base64url');
+
+    const kbHdr = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'kb+jwt' })).toString('base64url');
+    const kbPay = Buffer.from(JSON.stringify({
+      iat: now,
+      aud: 'http://localhost:8081',
+      nonce: reqRes.nonce,
+      sd_hash: sdHash
+    })).toString('base64url');
+    const kbSig = crypto.sign('SHA256', Buffer.from(`${kbHdr}.${kbPay}`, 'ascii'), { key: rogueKeyPair.privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+    const fullRogueVpToken = `${rogueSdJwtPrefix}${kbHdr}.${kbPay}.${kbSig}`;
+
+    const rogueRes = await fetch('http://localhost:8081/direct_post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        vp_token: fullRogueVpToken,
+        presentation_submission: '{}'
+      }).toString()
+    });
+
+    const rogueBody = await rogueRes.json();
+    const rogueRejected = rogueRes.status === 400 &&
+      rogueBody.error_description?.includes('ERR_UNTRUSTED_ISSUER');
+    assertCheck('REGRESSION-01', 'Rogue Untrusted Issuer / Self-Signed header.jwk Rejection Defense', rogueRejected, `HTTP ${rogueRes.status} (${rogueBody.error_description || rogueBody.error})`);
+  } catch (e) {
+    assertCheck('REGRESSION-01', 'Rogue Untrusted Issuer Rejection Defense', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // CHECK 16: REGRESSION-02 - Stateful Replay Protection (genuine single-use nonce replay)
+  // -------------------------------------------------------------------------
+  try {
+    const authReq = await fetch('http://localhost:8081/api/v1/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format: 'vc+sd-jwt' })
+    }).then(r => r.json());
+
+    const replayPayload = {
+      verifierType: 'mock-vp',
+      credential: sampleSdJwt,
+      format: 'vc+sd-jwt',
+      nonce: authReq.nonce
+    };
+
+    // 1st submission: binds the session nonce via kb+jwt and consumes it
+    const firstVerify = await fetch('http://localhost:4000/api/v1/orchestrate/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(replayPayload)
+    });
+    const firstOk = firstVerify.status === 200;
+
+    // 2nd submission: IDENTICAL presentation reusing the SAME verifier nonce.
+    // The BFF re-signs a fresh kb+jwt with the same nonce; the verifier must detect
+    // that this nonce was already consumed and reject the replay.
+    const replayVerify = await fetch('http://localhost:4000/api/v1/orchestrate/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(replayPayload)
+    });
+    const replayData = await replayVerify.json();
+    const replayBlocked = replayVerify.status === 400 &&
+      /ERR_NONCE_ALREADY_CONSUMED/.test(replayData.result?.error_description || '');
+
+    assertCheck('REGRESSION-02', 'Stateful Nonce Binding & Single-Use Replay Defense', firstOk && replayBlocked, `1st: HTTP ${firstVerify.status}, replay: HTTP ${replayVerify.status} (${replayData.result?.error_description || ''})`);
+  } catch (e) {
+    assertCheck('REGRESSION-02', 'Stateful Nonce Binding & Replay Defense', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // CHECK 17: REGRESSION-03 - Universal Fall-Through Elimination (Garbage String Rejection)
+  // -------------------------------------------------------------------------
+  try {
+    const garbageRes = await fetch('http://localhost:8081/direct_post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        vp_token: 'COMPLETELY_INVALID_GARBAGE_PAYLOAD_STRING_12345',
+        presentation_submission: '{}'
+      }).toString()
+    });
+
+    const garbageBody = await garbageRes.json();
+    const garbageRejected = garbageRes.status === 400 &&
+      garbageBody.error_description?.includes('ERR_UNSUPPORTED_OR_MALFORMED_VP_TOKEN');
+    assertCheck('REGRESSION-03', 'Universal Fall-Through Bypass Elimination (Garbage String Rejection)', garbageRejected, `HTTP ${garbageRes.status} (${garbageBody.error_description})`);
+  } catch (e) {
+    assertCheck('REGRESSION-03', 'Universal Fall-Through Bypass Elimination', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // CHECK 18: REGRESSION-04 - Authentic ISO 18013-5 mdoc CBOR Tag 24 & COSE_Sign1 Flow
+  // -------------------------------------------------------------------------
+  try {
+    const mdocIssue = await fetch('http://localhost:4000/api/v1/orchestrate/issue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        issuerType: 'mock-vci',
+        credentialFormat: 'mso_mdoc'
+      })
+    }).then(r => r.json());
+
+    const mdocVerify = await fetch('http://localhost:4000/api/v1/orchestrate/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        verifierType: 'mock-vp',
+        credential: mdocIssue.credential,
+        format: 'mso_mdoc'
+      })
+    });
+
+    const mdocVerifyData = await mdocVerify.json();
+    const mdocValid = mdocVerify.status === 200 && mdocVerifyData.result?.format === 'mso_mdoc' && mdocVerifyData.result?.doctype === 'org.iso.18013.5.1.mDL';
+    assertCheck('REGRESSION-04', 'Authentic ISO/IEC 18013-5 mdoc CBOR Tag 24 Issuance & COSE_Sign1 Verification', mdocValid, `HTTP ${mdocVerify.status} (docType: ${mdocVerifyData.result?.doctype})`);
+  } catch (e) {
+    assertCheck('REGRESSION-04', 'Authentic ISO 18013-5 mdoc CBOR Flow', false, e.message);
   }
 
   // -------------------------------------------------------------------------

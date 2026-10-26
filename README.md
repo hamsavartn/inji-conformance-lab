@@ -1,103 +1,117 @@
 # MOSIP Inji Conformance Laboratory (`Inji-Conformance-Lab`)
-> **Zero-Trust Interoperability Suite & Conformance Engine for MOSIP Inji**  
-> **Problem Statement 02: Inji Interoperability Playground | MOSIP Decode 2026**
 
-![Conformance Badge](https://img.shields.io/badge/MOSIP--Inji--Conformance-100%25%20COMPLIANT-brightgreen)
+> **Zero-Trust Interoperability Suite & Conformance Engine for MOSIP Inji**
+> **Problem Statement 02: Inji Interoperability Playground | MOSIP Decode 2026 (HIGH complexity)**
+
+![Node](https://img.shields.io/badge/Node-v22%2B%20%7C%20v24-green)
+![Docker](https://img.shields.io/badge/Docker-920MB%20RAM%20Cap-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Node](https://img.shields.io/badge/Node-v20%2B%20%7C%20v24-green)
-![Docker](https://img.shields.io/badge/Docker-1.5GB%20RAM%20Cap-blue)
+![Checks](https://img.shields.io/badge/automated%20checks-51%2F51%20passing-brightgreen)
 
 ---
 
-## 1. Executive Summary: What is this Project?
+## 1. What This Project Is
 
-The **MOSIP Inji Conformance Laboratory** is an enterprise-grade conformance testing, protocol inspection, and adversarial fuzzing platform designed to prove cross-ecosystem interoperability for the **MOSIP Inji stack** (`Inji Certify`, `Inji Web`, `Inji Mobile`, `Inji Verify`).
+A browser-based **interoperability playground, conformance oracle, and adversarial test bench** for the MOSIP Inji stack (Inji Certify, Inji Web, Inji Mobile, Inji Verify). It executes the full `Issue → Hold → Present → Verify` credential lifecycle across any permutation of issuers, wallets, and verifiers, renders every raw protocol payload in real time, and attacks its own verifier with cryptographic tamper vectors to prove it fails closed.
 
-Modeled after the official OpenID Foundation (OIDF) and W3C conformance suites, it provides:
-1. **Interactive 3-Lane Matrix**: Seamlessly interconnect any permutation of:
-   - **Issuers**: MOSIP Collab Inji Certify (Live), Mock Inji Certify (Draft 13 Local), External Walt.id (Draft 14).
-   - **Wallets**: Automated Headless Synthetic Agent, Inji Web Browser Bridge, Inji Mobile QR Bridge (Claim-169).
-   - **Verifiers**: MOSIP Collab Inji Verify (Live), Mock Inji Verify (Draft 21–23 Local).
-2. **Multi-Format Cryptographic Engine**:
-   - **IETF SD-JWT VC**: Selective disclosure claim unspooling with real-time SHA-256 digest validation and holder key-binding JWT (`kb_jwt`).
-   - **W3C VC JSON-LD**: `Ed25519Signature2020` canonicalization and proof validation.
-   - **ISO/IEC 18013-5 mdoc**: CBOR Tag 24 (`#6.24`) wrapper and `COSE_Sign1` Mobile Security Object inspector.
-3. **5-Layer Adversarial Chaos Monkey Engine**:
-   - Injects cryptographic bit-flips, disclosure stripping, nonce mutations, and expiration backdating.
-   - Verifies that relying parties fail-closed with deterministic HTTP 400 rejection codes.
-4. **Judge Mode (1-Click Automated Matrix)**:
-   - Executes all 8 combinatorial lifecycle permutations and negative tests in under 3 seconds.
-   - Generates an exportable conformance scorecard and SVG certification badge.
+- **3-Lane Matrix**: Mock Inji Certify (OpenID4VCI Draft 13) / live MOSIP Collab probe / Draft-14 transpilation demo × headless synthetic wallet agent × Mock Inji Verify (OpenID4VP Draft 21-23).
+- **4 credential formats**: IETF SD-JWT VC (`vc+sd-jwt`, RFC 9901 `sd_hash` key binding), `dc+sd-jwt`, W3C VC JSON-LD (`ldp_vc`, Ed25519), ISO/IEC 18013-5 `mso_mdoc` (CBOR Tag 24 + COSE_Sign1 + MSO `valueDigests`).
+- **Real cryptography everywhere**: ES256 IEEE P1363 (64-byte r‖s) with low-S normalization, Ed25519, RFC 9449 DPoP (`ath`, `jti`, `htm`/`htu`, `cnf.jkt`), RFC 7638 thumbprints. No stubbed verifications, no string-matching shortcuts.
+- **8-vector Chaos Monkey** (VEC-01..08) plus an independent adversarial security suite — every attack must be rejected with its specific RFC 7807 error code or the test fails.
+- **Judge Mode**: one click runs the concurrent 8-lane interop matrix, scores it honestly, and exports an interoperability report + RFC 7807 upstream bug reports.
 
 ---
 
-## 2. 3-Minute Quickstart
+## 2. How We Audited Before Claiming Anything (Read This First)
 
-### Option A: Local Native Node Run
+> **We did not trust our own first audit.** An initial internal report claimed "100% everywhere." Before submitting, that report was discarded and every claim was re-derived from live execution — including a new attacker-written probe suite that deliberately tried to break the system with attacker-held cryptographic keys.
+
+### The audit method
+
+1. **Baseline reproduction.** All existing suites were re-run from a cold start (`26/26` e2e checks, mdoc suite, 8/8 CLI matrix) — confirming the harness executes, *not* that the system was correct.
+2. **Never trust the test suite.** Each test was read and interrogated: does the assertion actually pin the specific security behavior, or would any `400` satisfy it? Several did not — e.g. the "replay" test actually submitted a malformed token (testing the wrong thing), and chaos assertions accepted *any* `invalid_presentation` error. All were strengthened to assert exact error codes.
+3. **Adversarial execution with attacker-held keys.** A new independent suite (`scripts/test_security_regression.js`) attacked the running services the way a real attacker would: forged access tokens, key-binding JWTs without `sd_hash`, foreign-audience bindings, presentations that withhold every requested claim, UINs violating the requested format, byte-flipped Ed25519 proofs, replayed nonces, DPoP proofs with wrong `htm`.
+4. **Confirmed defects, then fixed, then proved the fix.** The probe suite initially failed **7 of 10 checks** — seven live-exploitable defects in code a prior report had certified as fully hardened (see [AUDIT_REPORT.md](AUDIT_REPORT.md) §C). Each was fixed, and each fix is now locked behind the probe that originally broke it: **3/10 → 10/10**.
+5. **Honesty fixes in the UI itself.** The scorecard previously hardcoded "100% CONFORMANCE CERTIFIED"; it now renders the real percentage. Token-anatomy badges previously said "SHA-256 MATCH" unconditionally; they now compute genuine SHA-256 digests in your browser and show `UNBOUND DIGEST` on mismatch. Anything simulated is labeled "Simulated" in the UI.
+6. **Supply-chain + ops audit.** `npm audit` (a HIGH body-parser DoS advisory was found and patched, 1.20.8→1.20.9, now 0 vulnerabilities), dependency lockfiles, Docker/Compose config, CI workflow (now fail-closed with real health waits), and `.gitignore` hygiene.
+7. **Evidence ledger.** Every claim in this README maps to a command you can run yourself (§5) and every limitation is written down (§8). What could not be executed in our environment is marked UNVERIFIED — not silently claimed.
+
+### Current verification state (2026-10-24, cold-start run)
+
+| Suite | Checks | Result |
+|:---|:---:|:---|
+| Chain of Verification (`scripts/test_e2e_local.js`) | 26 | **26/26 PASS** |
+| Adversarial Security Regression (`scripts/test_security_regression.js`) | 10 | **10/10 PASS** (was 3/10 pre-fix) |
+| mdoc Tamper & Replay (`scripts/test_mdoc_tamper_and_replay.js`) | 4 | **4/4 PASS** |
+| Core Invariants (`scripts/verify_six_tests.js`) | 4 | **all PASS** |
+| CI Interop Matrix (`scripts/cli_interop_runner.sh`) | 8 lanes | **8/8 PASS, 100%** |
+| Frontend `tsc --noEmit` / `vite build` | — | **clean / success** |
+| `npm audit` (all 3 services) | — | **0 vulnerabilities** |
+| WebSocket CSWSH origin guard (live probe) | — | **malicious origin → 403** |
+
+Full evidence, defect register (IDs, root causes, fixes, regression tests), and per-category assessments: **[AUDIT_REPORT.md](AUDIT_REPORT.md)** · **[docs/verification-matrix.md](docs/verification-matrix.md)**.
+
+---
+
+## 3. Quickstart (under 3 minutes)
+
+### Option A: Zero-Docker native run
 ```bash
-# 1. Install dependencies
-cd backend && npm install
-cd ../mocks/issuer && npm install
-cd ../mocks/verifier && npm install
-cd ../frontend && npm install
-cd ..
+# 1. Install dependencies (one-time)
+cd backend && npm install && cd ../mocks/issuer && npm install && cd ../verifier && npm install && cd ../../../frontend && npm install && cd ..
 
-# 2. Run automated test suite to verify 100% conformance
-node scripts/test_e2e_local.js
+# 2. Launch all 4 services (Windows: auto-frees ports 3000/4000/8080/8081 first)
+node scripts/start_local.js
+```
+| Service | URL |
+|:---|:---|
+| Web UI | http://localhost:3000 |
+| BFF Gateway + Developer Portal | http://localhost:4000 |
+| Live Telemetry Viewer | http://localhost:4000/telemetry |
+| Mock Inji Certify (issuer) | http://localhost:8080 |
+| Mock Inji Verify (verifier) | http://localhost:8081 |
 
-# 3. Start local development server
-# Terminal 1: Mock Issuer (:8080)
-node mocks/issuer/server.js
-
-# Terminal 2: Mock Verifier (:8081)
-node mocks/verifier/server.js
-
-# Terminal 3: Backend BFF & Telemetry WebSocket (:4000)
-node backend/server.js
-
-# Terminal 4: Frontend UI (:3000)
-cd frontend && npm run dev
+### Option B: One-command Docker Compose (judge mode)
+```bash
+docker compose up --build     # 920MB hard RAM ceiling, healthchecked, ordered startup
 ```
 
-Visit **`http://localhost:3000`** in your browser.
-
-### Option B: One-Command Docker Compose
+### Verify it works (fail-closed suites)
 ```bash
-# Start all containers under strict 1.5GB RAM constraints
-docker compose up --build
+node scripts/test_e2e_local.js            # 26/26 expected
+node scripts/test_security_regression.js  # 10/10 expected
+node scripts/test_mdoc_tamper_and_replay.js  # 4/4 expected
+node scripts/verify_six_tests.js          # all invariants expected
+bash scripts/cli_interop_runner.sh        # 100% (8/8 lanes) expected, writes INTEROP_MATRIX.md
 ```
-- Frontend UI: `http://localhost:3000`
-- BFF Gateway & WebSocket: `http://localhost:4000`
-- Mock Issuer: `http://localhost:8080`
-- Mock Verifier: `http://localhost:8081`
+Every suite exits nonzero on any failure — nothing can silently pass. Full acceptance checklist (including 2-minute manual attack probes and a UI walkthrough): [JUDGE_TESTING_GUIDE.md](JUDGE_TESTING_GUIDE.md) §6.
 
 ---
 
-## 3. Hackathon Compliance Matrix (Problem Statement 02)
+## 4. Hackathon Compliance Matrix (Problem Statement 02)
 
-| Category | Requirement / Task | Implementation in Inji-Conformance-Lab | Status |
-| :--- | :--- | :--- | :--- |
-| **Mandatory 1** | Stand up core Inji Stack end-to-end | Mock Certify (:8080) + Headless Wallet Agent + Mock Verify (:8081) + Live Collab Sandbox | **100% COMPLETE** |
-| **Mandatory 2** | 3-column "Issuer → Wallet → Verifier" UI | Interactive 3-lane matrix with radio selectors for local and live modules | **100% COMPLETE** |
-| **Mandatory 3** | Live "Issue a Credential" flow (OpenID4VCI) | Discovery, Credential Offer, /token with DPoP, /credential with singular proof | **100% COMPLETE** |
-| **Mandatory 4** | Live "Present & Verify" flow (OpenID4VP) | DIF PE 2.0 auth request, Claim-169 QR scheme, /direct_post submission | **100% COMPLETE** |
-| **Mandatory 5** | Protocol inspector panel with raw payloads | Live tabbed inspector showing all 4 hops, decoded JWTs, and raw payload stream | **100% COMPLETE** |
-| **Mandatory 6** | Support 2+ credential formats end-to-end | IETF SD-JWT VC (`vc+sd-jwt`) and W3C VC JSON-LD (`ldp_vc`) with clear UI labeling | **100% COMPLETE** |
-| **Mandatory 7** | Pass/fail interoperability report per run | In-app Conformance Scorecard with SVG badge, latency metrics, and error codes | **100% COMPLETE** |
-| **Good-to-have 1** | Non-Inji standards-compliant mock | External Walt.id Issuer (Draft 14) option with cross-draft compatibility | **100% COMPLETE** |
-| **Good-to-have 2** | ISO 18013-5 mdoc credential format | Added `mso_mdoc` format with CBOR Tag 24 structure in discovery and request | **100% COMPLETE** |
-| **Good-to-have 3** | Interactive/Animated Mermaid sequence diagram | Real-time dynamic Mermaid.js sequence visualizer rendering every protocol hop | **100% COMPLETE** |
-| **Good-to-have 4** | "Replay & Tamper" negative assertion mode | 5-Layer Chaos Monkey Fuzzer (signature flip, disclosure strip, nonce mutate, expiry backdate) | **100% COMPLETE** |
-| **Good-to-have 5** | Historical dashboard of past interop runs | Persistent SQLite database (`db/test_runs.json`) recording all execution telemetry | **100% COMPLETE** |
-| **Good-to-have 6** | Same-device deep link & Claim-169 QR scheme | Fully generated `openid4vp://?request_uri=...` and `openid-credential-offer://` | **100% COMPLETE** |
-| **Bonus 1** | CI-style automated test runner | Headless runner `scripts/test_e2e_local.js` executing 100% positive and negative tests | **100% COMPLETE** |
-| **Bonus 2** | Upstream GitHub issue contributor | 1-Click RFC 7807 problem details generator ready to file directly to `mosip/inji-*` | **100% COMPLETE** |
-| **Bonus 3** | Telemetry & Observability Hub | Real-time WebSocket event broadcaster (`ws://localhost:4000/telemetry`) | **100% COMPLETE** |
-| **Bonus 4** | One-command Docker Compose bundle | Fully tuned `docker-compose.yml` operating under strict 1.5GB RAM ceiling | **100% COMPLETE** |
+| Requirement | Status | Evidence |
+|:---|:---:|:---|
+| **M1** Core Inji stack end-to-end | **VERIFIED** | 8/8 matrix lanes; full lifecycle across 4 formats |
+| **M2** 3-column Issuer→Wallet→Verifier UI | **VERIFIED** | UI lanes with honest "Simulated" labeling |
+| **M3** Live issuance flow (OpenID4VCI Draft 13) | **VERIFIED** | DPoP `ath`/`jkt`/`jti`, P1363 proofs, single-use `c_nonce` |
+| **M4** Live present & verify (OpenID4VP Draft 21-23) | **VERIFIED** | DIF PE 2.0 + mandatory RFC 9901 `sd_hash` + audience-checked kb+jwt |
+| **M5** Protocol inspector with raw payloads | **VERIFIED** | 7 tabs; anatomy badges compute real SHA-256 digests client-side |
+| **M6** 2+ credential formats end-to-end | **VERIFIED** | 4 formats: `vc+sd-jwt`, `dc+sd-jwt`, `ldp_vc`, `mso_mdoc` |
+| **M7** Pass/fail interop report per run | **VERIFIED** | Honest scorecard (real %, failing lanes listed) + `INTEROP_MATRIX.md` export |
+| **G1** Non-Inji standards-compliant mock | **PARTIAL (labeled)** | Draft 13⇄14 transpiler + local Walt.id-simulation route; no external network interop claimed |
+| **G2** ISO 18013-5 mdoc | **VERIFIED (bounded)** | COSE_Sign1 + per-attribute `valueDigests` (§9.1.2.4), digestID checks, replay defense |
+| **G3** Animated Mermaid sequence | **VERIFIED** | WebSocket-driven, debounced, reflects actual selections |
+| **G4** Replay & tamper negative mode | **VERIFIED** | 8 vectors + 10 adversarial probes, all code-specific rejections |
+| **G5** Historical dashboard | **VERIFIED** | SQLite WAL; PII-redacted at write *and* read |
+| **B1** CI/CLI automated runner | **VERIFIED** | Fail-closed CLI + GitHub Action (push/PR/manual) |
+| **B2** Telemetry & observability | **VERIFIED** | Origin-guarded WS (CSWSH 403 verified live), per-hop latency |
+| **B3** Upstream bug exporter | **VERIFIED** | RFC 7807 Markdown templates pre-loaded with 4 documented MOSIP gaps |
+| **B4** One-command Docker Compose | **PARTIALLY VERIFIED** | Config validated + healthchecks added; runtime verified in CI (daemon offline on the audit machine — see AUDIT_REPORT §D) |
 
 ---
 
-## 4. High-Level Architecture & Protocol Handshake
+## 5. Architecture & Protocol Handshake
 
 ```mermaid
 sequenceDiagram
@@ -119,14 +133,13 @@ sequenceDiagram
     Wallet->>Issuer: POST /token (DPoP Proof with Ephemeral P-256)
     Issuer-->>Wallet: 200 OK (access_token + c_nonce)
     Wallet->>Issuer: POST /credential (DPoP ath + Singular Proof)
-    Issuer-->>Wallet: 200 OK (Signed SD-JWT / W3C VC)
-    
-    Note over BFF,Wallet: [Optional Chaos Injection]: Signature Flip / Disclosure Strip / Replay
-    
+    Issuer-->>Wallet: 200 OK (Signed SD-JWT / W3C VC / mdoc)
+
+    Note over BFF,Wallet: [Optional Chaos Injection]: VEC-01..08
     UI->>BFF: POST /api/v1/orchestrate/verify
     BFF->>Verifier: POST /api/v1/request (DIF PE 2.0)
-    Verifier-->>BFF: 200 OK (presentation_definition)
-    Wallet->>Verifier: POST /direct_post (vp_token + submission)
+    Verifier-->>BFF: 200 OK (presentation_definition + nonce)
+    Wallet->>Verifier: POST /direct_post (vp_token + kb+jwt with sd_hash)
     alt Happy Path Conformance
         Verifier-->>BFF: 200 OK (Verification Result: SUCCESS)
     else Adversarial Chaos Vector Active
@@ -135,56 +148,52 @@ sequenceDiagram
     BFF-->>UI: WebSocket Telemetry Packet (INTERCEPT_EVENT)
 ```
 
----
-
-## 5. Adversarial Chaos Monkey Engine: Test Vectors
-
-| Attack Vector | Layer | Mutation Target & Action | Expected Status |
-| :--- | :--- | :--- | :--- |
-| `SIG_FLIP` | Layer 1 (Crypto) | Alter final byte of Base64URL signature to `Z` | `400 invalid_signature` |
-| `STRIP_DISCLOSURES` | Layer 4 (Selective Disclosure) | Truncate SD-JWT at first `~` delimiter | `400 invalid_presentation` |
-| `MUTATE_NONCE` | Layer 3 (Holder Binding) | Mutate `kb_jwt.nonce` to trigger replay failure | `400 invalid_presentation` |
-| `BACKDATE_EXP` | Layer 2 (Temporal) | Backdate `exp` by 600s (exceeds 300s clock-skew) | `400 expired_credential` |
+Detailed component specs: [architecture.md](architecture.md) · API surface: [openapi_spec.yaml](openapi_spec.yaml) · each service also serves an interactive developer portal at its root URL.
 
 ---
 
-## 6. Pitch Presentation Slide Deck Outline (For Jury)
+## 6. Adversarial Chaos Monkey Engine (VEC-01..08)
 
-- **Slide 1: Title & Value Proposition** — *MOSIP Inji Conformance Laboratory: Moving from Internal Compatibility to Global Zero-Trust Interoperability.*
-- **Slide 2: The Core Problem** — *Why real-world verifiable credential adoption fails: protocol draft version mismatches (Draft 13 vs Draft 14), DPoP binding errors (`ath`), and negative-path silent acceptances.*
-- **Slide 3: Architecture & 3-Lane Matrix** — *A unified playground bridging live MOSIP Collab infrastructure, automated headless wallet agents, and external ecosystems (Walt.id, EUDI).*
-- **Slide 4: Cryptographic Deep-Dive (SD-JWT VC & Selective Disclosure)** — *How Inji Lab unpacks salted disclosures, validates SHA-256 digests in real time, and binds presentations with ephemeral Holder Key-Binding JWTs (`kb+jwt`).*
-- **Slide 5: The 5-Layer Adversarial Chaos Monkey Engine** — *Testing resilience: proving that Inji Verify strictly rejects tampered signatures, stripped disclosures, replayed nonces, and expired credentials.*
-- **Slide 6: Automated Conformance & Upstream Feedback Loop** — *The 1-Click Conformance Scorecard and RFC 7807 GitHub Bug Exporter filing deterministic standards deviations directly to `mosip/inji-*`.*
-- **Slide 7: Production Readiness & Memory Footprint** — *Sub-1.5GB RAM footprint, zero paid dependencies, Apache-2.0, one-command Docker Compose.*
+| Vector | Attack | Expected Rejection (asserted by tests) |
+|:---|:---|:---|
+| `VEC-01` | Issuer signature bit-flip (genuine 1-bit crypto corruption) | `400 ERR_INVALID_ES256_SIGNATURE` |
+| `VEC-02` | Key-binding JWT `iat` backdated 15 min (beyond ±300s skew) | `400 ERR_KB_JWT_IAT_OUTSIDE_SKEW_WINDOW` |
+| `VEC-03` | Cut-and-paste `sd_hash` desync | `400 ERR_KB_SD_HASH_MISMATCH` |
+| `VEC-04` | Unbound disclosure injection (digest ∉ issuer `_sd`) | `400 ERR_UNBOUND_DISCLOSURE_DIGEST` |
+| `VEC-05` | Expired credential presentation | `400 ERR_CREDENTIAL_EXPIRED` |
+| `VEC-06` | Recursive `_sd` nesting loop | `400 ERR_RECURSIVE_SD_NESTING_LIMIT_EXCEEDED` |
+| `VEC-07` | INJIVER-1131 credential type mismatch | `400 ERR_INJIVER_1131_WRONG_CREDENTIAL_TYPE` |
+| `VEC-08` | ASN.1 DER signature where 64-byte P1363 is mandated | `400 ERR_NON_P1363_SIGNATURE_LENGTH` |
 
----
-
-## 7. 3-Minute Video Demo Script (For Submission Video)
-
-- **0:00 - 0:30 (Introduction & Challenge):**  
-  *"Hello judges. In digital identity, having an internal mock that passes your own tests is not enough. Digital wallets across nations must adhere to strict OpenID4VCI and OpenID4VP standards. We built the MOSIP Inji Conformance Laboratory to stress-test and verify interoperability across the Inji stack."*
-- **0:30 - 1:15 (Happy Path SD-JWT Issuance & Protocol Inspector):**  
-  *Select Mock Inji Certify → Automated Wallet Agent → Mock Inji Verify with IETF SD-JWT VC. Click "Execute Handshake Flow". Point out the live telemetry stream showing all 4 hops (Discovery, Pre-auth Credential Offer, Token exchange with DPoP, and Credential issuance). Switch to the Token Anatomy tab to reveal the color-coded decoded JWT header, payload, salted disclosures with real-time SHA-256 verification, and Holder Key-Binding JWT.*
-- **1:15 - 1:45 (Dynamic Mermaid Sequence Tracking):**  
-  *Switch to the Dynamic Mermaid Sequence tab to demonstrate the real-time diagram rendering with live numbered arrows reflecting every protocol exchange.*
-- **1:45 - 2:30 (Adversarial Chaos Monkey & Negative Assertion):**  
-  *Select the Chaos Fuzzer: Layer 1 Signature Bit-Flip. Click "Execute Handshake Flow". Show the real-time status banner turning green with "NEGATIVE ASSERTION CONFIRMED (HTTP 400 REJECTION AS EXPECTED)". Click "Export GitHub Bug Report" to show the generated RFC 7807 issue template ready to file upstream to MOSIP.*
-- **2:30 - 3:00 (1-Click Judge Conformance Matrix & Conclusion):**  
-  *Click "Run Judge Conformance Matrix" in the top bar. Confetti fires, rendering the 100% Conformance Scorecard across all 8 combinatorial permutations with sub-100ms latency. Conclude with: "Zero proprietary dependencies, running fully under 1.5GB RAM in Docker. Thank you."*
+**Security hardening (all regression-locked):** untrusted `header.jwk` keys and userinfo-SSRF tricks (`ERR_UNTRUSTED_ISSUER`); missing/foreign-audience kb+jwt (`ERR_MISSING_SD_HASH`, `ERR_KB_JWT_AUD_MISMATCH`); withheld requested claims or bad UIN format (`ERR_REQUIRED_CLAIM_NOT_DISCLOSED`); unknown/expired access tokens (`401 invalid_token`); DPoP `htm`/`htu`/`iat`/`jti` violations; single-use nonces on every format (`ERR_NONCE_ALREADY_CONSUMED`); fail-closed Ed25519 key resolution; PII redaction in history and telemetry; CSWSH origin guard.
 
 ---
 
-## 8. Live MOSIP Collab Sandbox Endpoints
+## 7. Simulated Boundaries (We Label What Isn't Real)
 
-- **Live Inji Certify (Issuer)**: `https://injicertify-mock.collab.mosip.net`
-- **Live Inji Verify (Verifier)**: `https://injiverify.collab.mosip.net`
-- **Issuer Discovery Path**: `/.well-known/openid-credential-issuer` (Unauthenticated open access)
+- **Wallet selections** (`Inji Web`, `Inji Mobile`, synthetic agent) all execute via the built-in headless agent — labeled in the UI.
+- **External Walt.id issuer** routes to the local mock with Draft 13⇄14 transpilation — labeled "Simulated".
+- **Live MOSIP Collab** selections genuinely probe the live sandbox discovery (`https://injicertify-mock.collab.mosip.net` / `https://injiverify.collab.mosip.net`) and record the PMS `.p12` auth boundary in telemetry, then deterministically fall back to the local mock (partner certificates cannot ship in an open repo).
+- **W3C VC JSON-LD** uses deterministic JSON canonicalization for Ed25519 proofs — not URDNA2015 Data Integrity conformance.
+- **mdoc** covers the IssuerSigned path (COSE_Sign1 + MSO digests); DeviceSigned / NFC-BLE engagement is out of scope and not claimed.
 
 ---
 
-## 9. License & Standards Adherence
+## 8. Documentation Index
 
-- **License**: Apache-2.0 Open Source License.
-- **Code Quality**: Thoroughly documented, strict TypeScript interfaces, modular separation of concerns.
-- **No Paid APIs**: Built entirely on open specifications (`jose`, `cbor-x`, `React`, `Express`, `Mermaid.js`).
+| Document | Purpose |
+|:---|:---|
+| [PITCH_DECK.pptx](PITCH_DECK.pptx) | 10-slide pitch deck (rebuild: `node scripts/build_pitch_deck.js`) |
+| [docs/DEMO_VIDEO_SCRIPT.md](docs/DEMO_VIDEO_SCRIPT.md) | Second-by-second 5-minute demo video recording script |
+| [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) | Complete submission package checklist + judge Q&A prep |
+| [AUDIT_REPORT.md](AUDIT_REPORT.md) | Full audit: defect register, evidence ledger, release assessment |
+| [docs/verification-matrix.md](docs/verification-matrix.md) | Requirement → test traceability with honest statuses |
+| [JUDGE_TESTING_GUIDE.md](JUDGE_TESTING_GUIDE.md) | Judge/evaluator manual + acceptance checklist (§6) |
+| [architecture.md](architecture.md) / [design.md](design.md) | Architecture & design specs |
+
+---
+
+## 9. License & Standards
+
+- **License:** Apache-2.0 (see [LICENSE](LICENSE)) — OSI-approved, MOSIP-ecosystem standard.
+- **Built on open specifications only:** OpenID4VCI Draft 13/14, OpenID4VP Draft 21-23, DIF PE 2.0, RFC 7515/9449/9901/7638, ISO/IEC 18013-5. No paid APIs.

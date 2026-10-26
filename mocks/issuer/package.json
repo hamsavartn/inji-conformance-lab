@@ -4,6 +4,7 @@
   "description": "Deterministic OpenID4VCI Draft 13 Mock Issuer for MOSIP Conformance Testing",
   "main": "server.js",
   "dependencies": {
+    "cbor-x": "^1.6.8",
     "cors": "^2.8.5",
     "express": "^4.21.1",
     "jose": "^5.9.6"
