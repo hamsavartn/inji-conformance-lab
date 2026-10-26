@@ -33,8 +33,8 @@ interface MatrixResult {
   error?: string;
 }
 
-const API_BASE = typeof window !== 'undefined' && window.location.hostname ? `http://${window.location.hostname}:4000` : 'http://localhost:4000';
-const WS_BASE = typeof window !== 'undefined' && window.location.hostname ? `ws://${window.location.hostname}:4000` : 'ws://localhost:4000';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || (typeof window !== 'undefined' && window.location.hostname ? `http://${window.location.hostname}:4000` : 'http://localhost:4000');
+const WS_BASE = (import.meta as any).env?.VITE_WS_BASE || (typeof window !== 'undefined' && window.location.hostname ? `ws://${window.location.hostname}:4000` : 'ws://localhost:4000');
 
 const AVAILABLE_CLAIMS = [
   { id: 'fullName', label: 'Full Legal Name', sample: 'Aarav Kumar', sensitive: false },
