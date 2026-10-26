@@ -8,6 +8,8 @@
     "test:e2e": "node scripts/test_e2e_local.js",
     "start:local": "node scripts/start_local.js",
     "dev": "node scripts/start_local.js",
+    "build": "npm run build --prefix frontend",
+    "start": "node scripts/start_production.js",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down",
     "package": "powershell -ExecutionPolicy Bypass -File .\\package_project.ps1"

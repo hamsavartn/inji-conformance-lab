@@ -83,6 +83,14 @@ node scripts/start_local.js
 docker compose up --build     # 920MB hard RAM ceiling, healthchecked, ordered startup
 ```
 
+### Option C: Live Cloud Deployment on Railway (Instant Judge Access)
+To host the full 4-microservice testbed in the cloud with zero configuration:
+1. Push to GitHub (`git push origin master`).
+2. In [Railway.app](https://railway.app), click **New Project** → **Deploy from GitHub repo**.
+3. Railway automatically detects [`Dockerfile`](Dockerfile) & [`railway.json`](railway.json), boots all 4 microservices in a single unified container, and binds your public HTTPS domain.  
+Complete step-by-step manual: **[docs/RAILWAY_DEPLOYMENT_GUIDE.md](docs/RAILWAY_DEPLOYMENT_GUIDE.md)**.
+
+
 ### Verify it works (fail-closed suites)
 ```bash
 node scripts/test_e2e_local.js            # 26/26 expected

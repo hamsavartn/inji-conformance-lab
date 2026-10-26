@@ -66,6 +66,9 @@ $Required = @(
     "README.md",
     "PITCH_DECK.pptx",
     "docker-compose.yml",
+    "Dockerfile",
+    "railway.json",
+    "docs/RAILWAY_DEPLOYMENT_GUIDE.md",
     ".github/workflows/interop-matrix.yml"
 )
 $Missing = $Required | Where-Object { $Names -notcontains $_ }

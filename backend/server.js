@@ -33,9 +33,25 @@ const LIVE_MIMOTO_URL = process.env.COLLAB_MIMOTO_URL || 'https://api.collab.mos
 const MOCK_CERTIFY_URL = process.env.MOCK_ISSUER_URL || process.env.MOCK_CERTIFY_URL || 'http://localhost:8080';
 const MOCK_VERIFY_URL = process.env.MOCK_VERIFIER_URL || process.env.MOCK_VERIFY_URL || 'http://localhost:8081';
 
-// Setup CORS strictly for dashboard hosts
+// Setup CORS strictly for dashboard hosts and verified cloud domains
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const allowedOrigins = [
+      'http://localhost:3000', 'http://127.0.0.1:3000',
+      'http://localhost:4000', 'http://127.0.0.1:4000',
+      'http://localhost:5173', 'http://127.0.0.1:5173'
+    ];
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.endsWith('.railway.app') ||
+      origin.endsWith('.onrender.com') ||
+      (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL)
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 
@@ -82,6 +98,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_matrix_runs_lane ON matrix_runs(lane);
 `);
 
+// Static frontend distribution (if built for production)
+const FRONTEND_DIST = path.join(__dirname, '../frontend/dist');
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+}
+
 // WebSocket Telemetry Hub with Origin Verification (CSWSH Guard - Issue 5)
 const ALLOWED_WS_ORIGINS = new Set([
   'http://localhost:3000',
@@ -100,6 +122,15 @@ const wss = new WebSocketServer({
     // Allow non-browser clients (e.g. wscat, curl, backend tests) or verified localhost origins
     if (!origin || ALLOWED_WS_ORIGINS.has(origin)) {
       return callback(true);
+    }
+    // Allow verified same-origin requests in cloud deployments (e.g. Railway, Render)
+    if (info.req && info.req.headers && info.req.headers.host) {
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.host === info.req.headers.host) {
+          return callback(true);
+        }
+      } catch (e) {}
     }
     return callback(false, 403, 'Forbidden: Cross-Site WebSocket Origin Disallowed');
   }
@@ -554,8 +585,11 @@ app.post('/api/v1/transpile', (req, res) => {
   }
 });
 
-// Root Landing Page & Developer Portal for Conformance Gateway (Port 4000)
+// Root Landing Page: Serves Interactive Web UI if built, or Conformance Gateway Dev Portal
 app.get('/', (req, res) => {
+  if (fs.existsSync(path.join(FRONTEND_DIST, 'index.html')) && req.query.devportal !== 'true') {
+    return res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  }
   if (req.accepts('html')) {
     let runCount = 0;
     try {
@@ -1744,6 +1778,19 @@ ${JSON.stringify(traceBlob || { timestamp: new Date().toISOString(), error, modu
 
   res.json({ markdown: issueMarkdown });
 });
+
+// SPA client-side routing fallback (serves index.html for non-API routes if frontend is built)
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/telemetry')) {
+      return next();
+    }
+    if (req.accepts('html')) {
+      return res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+    }
+    next();
+  });
+}
 
 // Custom 404 Handler (Prevents raw "Cannot GET" errors)
 app.use((req, res) => {
