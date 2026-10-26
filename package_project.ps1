@@ -53,7 +53,6 @@ $Required = @(
     "scripts/test_e2e_local.js",
     "scripts/test_security_regression.js",
     "scripts/test_mdoc_tamper_and_replay.js",
-    "docs/DEMO_VIDEO_SCRIPT.md",
     "docs/verification-matrix.md",
     "docs/screenshots/ui_main_dashboard.jpg",
     "docs/screenshots/ui_interop_matrix.jpg",
