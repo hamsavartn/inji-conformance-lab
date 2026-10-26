@@ -38,3 +38,11 @@ blueprint_raw.txt
 extract_docx.py
 fouriertherm*.png
 ieee_paper_preview.png
+
+# Audit Prompts & Internal Evaluator Mandates
+*AUDIT_PROMPT*.md
+*AUDIT_MANDATE*.md
+FINAL_JUDICIAL_AUDIT_REPORT.md
+
+# Video Speech Text / Script
+docs/DEMO_VIDEO_SCRIPT.md
