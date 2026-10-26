@@ -1,12 +1,40 @@
+# Dependencies
 node_modules/
 dist/
-.DS_Store
+package_staging/
+
+# Logs & Environment
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+
+# Operating System & Editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local Agent & IDE Scratch
 .gemini/
 .qodo/
-*.docx
+.playwright-mcp/
+.agents/
+skills-lock.json
+
+# SQLite Runtime Database Files
 *.db
 *.db-shm
 *.db-wal
+
+# Generated Build Artifacts & Zips
 mosip_inji_conformance_lab.zip
-.playwright-mcp/
+
+# Scratch Documents & Unrelated Assets
+*.docx
+blueprint_raw.txt
+extract_docx.py
+fouriertherm*.png
+ieee_paper_preview.png
