@@ -38,6 +38,10 @@ blueprint_raw.txt
 extract_docx.py
 fouriertherm*.png
 ieee_paper_preview.png
+memory.md
+tasks.md
+scripts/cleanup_skills.ps1
+scripts/setup_submission_folders.ps1
 
 # Audit Prompts & Internal Evaluator Mandates
 *AUDIT_PROMPT*.md

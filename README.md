@@ -23,6 +23,17 @@ A browser-based **interoperability playground, conformance oracle, and adversari
 - **8-vector Chaos Monkey** (VEC-01..08) plus an independent adversarial security suite — every attack must be rejected with its specific RFC 7807 error code or the test fails.
 - **Judge Mode**: one click runs the concurrent 8-lane interop matrix, scores it honestly, and exports an interoperability report + RFC 7807 upstream bug reports.
 
+### 📁 Hackathon Submission Dossier
+
+All required project deliverables are mirrored and organized into 7 categorized topic folders under [`submission_deliverables/`](submission_deliverables/):
+1. **[01. Pitch Presentation or Slide Deck](submission_deliverables/01_pitch_presentation_or_slide_deck/)**: `PITCH_DECK.pptx` & `PITCH_DECK.pdf`
+2. **[02. Design Mockup and Wireframe](submission_deliverables/02_design_mockup_and_wireframe/)**: `ui_main_dashboard.jpg`, `ui_interop_matrix.jpg`, `design.md`
+3. **[03. Architecture Diagram](submission_deliverables/03_architecture_diagram/)**: `architecture.md` (topology, sequence flows, zero-trust boundary)
+4. **[04. Test Data and Results](submission_deliverables/04_test_data_and_results/)**: `TEST_DATA.md`, test vectors, `INTEROP_MATRIX.md`, `AUDIT_REPORT.md` (40/40 tests)
+5. **[05. Usage and Installation Instructions](submission_deliverables/05_usage_and_installation_instructions/)**: `README.md`, `JUDGE_TESTING_GUIDE.md`, `docker-compose.yml`
+6. **[06. API Documentation](submission_deliverables/06_api_documentation/)**: `openapi_spec.yaml` (OpenAPI 3.0.3 specification)
+7. **[07. Packaged Zip Deliverables](submission_deliverables/07_packaged_zip_deliverables/)**: `mosip_inji_conformance_lab.zip` (Clean, verified standalone package)
+
 ### Visual Interface Previews
 
 | Interactive Protocol Inspector & Live Sequence Diagram | 8-Lane Concurrent Interop Conformance Matrix |

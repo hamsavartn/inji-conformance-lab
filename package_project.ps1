@@ -1,10 +1,6 @@
 # Packaging script for MOSIP Inji Conformance Lab
-# Builds mosip_inji_conformance_lab.zip with the CORRECT directory structure
-# (the previous recursive file-list approach flattened every file to the archive
-#  root, colliding server.js/package.json copies and losing all subdirectories).
-#
-# Method: stage a clean copy via robocopy (with directory/file exclusions),
-# then Compress-Archive the staging root so relative paths are preserved.
+# Builds mosip_inji_conformance_lab.zip with clean directory structure
+# and verified submission assets, strictly excluding all non-relevant files.
 
 $ErrorActionPreference = "Stop"
 $Destination = "mosip_inji_conformance_lab.zip"
@@ -16,12 +12,18 @@ if (Test-Path $Staging) { Remove-Item $Staging -Recurse -Force }
 # Directories to exclude entirely
 $ExcludeDirs = @(
     "node_modules", "dist", ".git", ".qodo", ".gemini", ".playwright-mcp",
-    ".zcode", ".claude", ".agents", "package_staging"
+    ".zcode", ".claude", ".agents", "package_staging", "scratch",
+    ".vscode", ".idea"
 )
-# Files to exclude (hackathon briefs, binary DB runtime files, the zip itself)
+
+# Files to exclude (runtime DBs, unneeded zips, scratch binaries, non-hackathon agent files)
 $ExcludeFiles = @(
     "*.db", "*.db-shm", "*.db-wal", "*.zip", "*.docx",
-    "mosip_inji_conformance_lab.zip"
+    "mosip_inji_conformance_lab.zip",
+    "*AUDIT_PROMPT*.md", "*AUDIT_MANDATE*.md", "FINAL_JUDICIAL_AUDIT_REPORT.md",
+    "DEMO_VIDEO_SCRIPT.md", "blueprint_raw.txt", "extract_docx.py",
+    "fouriertherm*.png", "ieee_paper_preview.png",
+    "memory.md", "tasks.md", "skills-lock.json", "cleanup_skills.ps1"
 )
 
 Write-Host "Staging clean project tree..." -ForegroundColor Cyan
@@ -39,12 +41,19 @@ Remove-Item $Staging -Recurse -Force
 $Zip = Get-Item $Destination
 Write-Host "Package complete: $($Zip.Name) ($([math]::Round($Zip.Length/1MB,2)) MB)" -ForegroundColor Green
 
-# Post-condition: the critical paths MUST exist with directory structure
-# (Compress-Archive on Windows stores separators as backslashes — normalize before comparing)
+# Copy to submission_deliverables folder
+$DeliverablesZipPath = "submission_deliverables/07_packaged_zip_deliverables/$Destination"
+if (Test-Path "submission_deliverables/07_packaged_zip_deliverables") {
+    Copy-Item $Destination $DeliverablesZipPath -Force
+    Write-Host "Copied package to: $DeliverablesZipPath" -ForegroundColor Green
+}
+
+# Post-condition: verify all critical submission assets exist in the archive
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Archive = [IO.Compression.ZipFile]::OpenRead($Zip.FullName)
 $Names = $Archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
 $Archive.Dispose()
+
 $Required = @(
     "backend/server.js",
     "mocks/issuer/server.js",
@@ -64,15 +73,41 @@ $Required = @(
     "LICENSE",
     "README.md",
     "PITCH_DECK.pptx",
+    "PITCH_DECK.pdf",
     "docker-compose.yml",
     "Dockerfile",
     "railway.json",
     "docs/RAILWAY_DEPLOYMENT_GUIDE.md",
-    ".github/workflows/interop-matrix.yml"
+    ".github/workflows/interop-matrix.yml",
+    "submission_deliverables/01_pitch_presentation_or_slide_deck/PITCH_DECK.pdf",
+    "submission_deliverables/02_design_mockup_and_wireframe/design.md",
+    "submission_deliverables/03_architecture_diagram/architecture.md",
+    "submission_deliverables/04_test_data_and_results/TEST_DATA.md",
+    "submission_deliverables/05_usage_and_installation_instructions/README.md",
+    "submission_deliverables/06_api_documentation/openapi_spec.yaml"
 )
+
 $Missing = $Required | Where-Object { $Names -notcontains $_ }
 if ($Missing.Count -gt 0) {
     Write-Host "VERIFICATION FAILED - missing from zip: $($Missing -join ', ')" -ForegroundColor Red
     exit 1
 }
-Write-Host "Verified: all $($Required.Count) critical deliverables present with correct paths." -ForegroundColor Green
+
+# Verify NO forbidden/unnecessary files slipped into the zip
+$ForbiddenMatches = $Names | Where-Object {
+    $_ -match 'AUDIT_PROMPT' -or
+    $_ -match 'AUDIT_MANDATE' -or
+    $_ -match 'DEMO_VIDEO_SCRIPT' -or
+    $_ -match 'fouriertherm' -or
+    $_ -match '\.docx$' -or
+    $_ -match 'blueprint_raw' -or
+    $_ -match 'memory\.md$' -or
+    $_ -match 'tasks\.md$'
+}
+
+if ($ForbiddenMatches.Count -gt 0) {
+    Write-Host "VERIFICATION FAILED - forbidden files found in zip: $($ForbiddenMatches -join ', ')" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Package Verification Passed: All $($Required.Count) required assets present. 0 unnecessary files." -ForegroundColor Green

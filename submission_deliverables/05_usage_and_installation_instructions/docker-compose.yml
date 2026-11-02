@@ -1,0 +1,88 @@
+services:
+  inji-lab-ui:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: npm run dev -- --host
+    ports:
+      - "3000:3000"
+    networks:
+      - inji-net
+    mem_limit: 512m
+
+  inji-lab-bff:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - MOCK_CERTIFY_URL=http://mock-certify:8080
+      - MOCK_VERIFY_URL=http://mock-verify:8081
+    command: node backend/server.js
+    ports:
+      - "4000:4000"
+    depends_on:
+      mock-certify:
+        condition: service_healthy
+      mock-verify:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    networks:
+      - inji-net
+    mem_limit: 512m
+
+  mock-certify:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=8080
+      - ISSUER_URL=http://mock-certify:8080
+    command: node mocks/issuer/server.js
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    networks:
+      - inji-net
+    mem_limit: 384m
+
+  mock-verify:
+    image: node:22-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PORT=8081
+      - VERIFIER_URL=http://mock-verify:8081
+      - ISSUER_URL=http://mock-certify:8080
+      - MOCK_CERTIFY_URL=http://mock-certify:8080
+    command: node mocks/verifier/server.js
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    networks:
+      - inji-net
+    mem_limit: 384m
+
+networks:
+  inji-net:
+    driver: bridge
