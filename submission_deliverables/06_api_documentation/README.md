@@ -29,3 +29,4 @@ This directory contains the machine-readable API specifications and reference do
 ### 3. Mock Inji Verify (Verifier)
 - `POST /api/v1/request`: OpenID4VP presentation definition generator (DIF PE 2.0).
 - `POST /api/v1/verify`: Presentation verification engine with cryptographic signature, disclosure, and expiration checks.
+

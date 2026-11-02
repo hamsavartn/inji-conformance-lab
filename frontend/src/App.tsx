@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import mermaid from 'mermaid';
 import confetti from 'canvas-confetti';
 import {
@@ -442,8 +442,21 @@ sequenceDiagram
   }
 
   const sdjwtAnatomy = parseSDJWT(issuedCredential);
-  const tokenByteSize = issuedCredential ? new Blob([issuedCredential]).size : 0;
-  const estimatedQrVersion = Math.min(40, Math.max(1, Math.ceil(tokenByteSize / 28)));
+
+  // Dynamically calculate presented token byte size reflecting selective disclosure
+  const tokenByteSize = useMemo(() => {
+    if (!issuedCredential) return 0;
+    if (sdjwtAnatomy && (selectedFormat === 'vc+sd-jwt' || selectedFormat === 'dc+sd-jwt')) {
+      const activeDisclosures = sdjwtAnatomy.disclosures.filter(d => selectedClaims.includes(d.key));
+      const presentedString = [sdjwtAnatomy.issuerJwt, ...activeDisclosures.map(d => d.rawBase64), sdjwtAnatomy.kbJwt]
+        .filter(Boolean)
+        .join('~');
+      return new Blob([presentedString]).size;
+    }
+    return new Blob([issuedCredential]).size;
+  }, [issuedCredential, selectedFormat, sdjwtAnatomy, selectedClaims]);
+
+  const estimatedQrVersion = Math.min(40, Math.max(1, Math.ceil(tokenByteSize / 40)));
   const privacyScore = Math.round((1 - (selectedClaims.length / AVAILABLE_CLAIMS.length)) * 100);
 
   return (
@@ -1056,15 +1069,15 @@ sequenceDiagram
                   <div style={{ marginBottom: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
                       <span>QR Version {estimatedQrVersion} (ISO/IEC 18004)</span>
-                      <span>Scannability: {tokenByteSize < 600 ? '98% Optimal' : '82% Standard'}</span>
+                      <span>Scannability: {tokenByteSize < 1400 ? '98% Optimal' : '82% Standard'}</span>
                     </div>
                     <div style={{ height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
                       <div
                         style={{
                           height: '100%',
-                          width: `${Math.min(100, Math.max(15, (tokenByteSize / 1200) * 100))}%`,
-                          background: tokenByteSize < 600 ? 'var(--accent-emerald)' : 'var(--accent-amber)',
-                          transition: 'width 0.3s'
+                          width: `${Math.min(100, Math.max(15, (tokenByteSize / 1700) * 100))}%`,
+                          background: tokenByteSize < 1400 ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+                          transition: 'width 0.3s, background 0.3s'
                         }}
                       ></div>
                     </div>

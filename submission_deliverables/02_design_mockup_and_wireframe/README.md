@@ -22,3 +22,4 @@ This directory contains the user interface mockups, wireframes, and design syste
    - Component hierarchy (Topology Selector, Monaco Inspector, Mermaid Graph, QR Meter)
    - State management model (Zustand reactive slices)
    - Micro-interaction and real-time animation guidelines
+

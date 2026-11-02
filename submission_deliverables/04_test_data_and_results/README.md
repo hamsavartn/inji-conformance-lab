@@ -21,3 +21,4 @@ This directory contains the complete test data dossier, sample credential vector
    - **40/40 Passing Tests** (0 failures, exit code 0)
    - Cryptographic conformance to IEEE P1363 (RFC 7515 / OpenSSL raw `r || s` 64-byte format)
    - Complete RFC 9449 DPoP enforcement
+

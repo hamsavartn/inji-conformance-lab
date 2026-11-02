@@ -35,3 +35,4 @@ docker compose up --build
 # 3. Access in browser
 http://localhost:3000
 ```
+

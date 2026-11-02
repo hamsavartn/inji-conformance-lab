@@ -13,3 +13,4 @@ This directory contains the architectural documentation, system models, and sequ
      - **Cryptographic Payloads**: SD-JWT VC (RFC 9901 / IETF), W3C Verifiable Credentials 1.1 / 2.0 (JSON-LD), ISO 18013-5 mdoc (CBOR Tag 24 + `COSE_Sign1`).
    - **Network Architecture**: Production single-port reverse proxy mapping for cloud hosts and local multi-container bridge networks.
    - **Mermaid Diagrams**: End-to-end multi-party sequence flows, data state machines, and fail-closed security models.
+
