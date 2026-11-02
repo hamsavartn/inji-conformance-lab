@@ -3,10 +3,13 @@
 > **Zero-Trust Interoperability Suite & Conformance Engine for MOSIP Inji**
 > **Problem Statement 02: Inji Interoperability Playground | MOSIP Decode 2026 (HIGH complexity)**
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-inji--conformance--lab.onrender.com-brightgreen?style=for-the-badge&logo=render)](https://inji-conformance-lab.onrender.com)
 ![Node](https://img.shields.io/badge/Node-v22%2B%20%7C%20v24-green)
 ![Docker](https://img.shields.io/badge/Docker-920MB%20RAM%20Cap-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Checks](https://img.shields.io/badge/automated%20checks-51%2F51%20passing-brightgreen)
+
+🌐 **Live Cloud Demo:** [https://inji-conformance-lab.onrender.com](https://inji-conformance-lab.onrender.com)
 
 ---
 

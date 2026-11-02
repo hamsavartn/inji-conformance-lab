@@ -2,6 +2,8 @@
 ## Comprehensive Evaluation Manual for Hackathon Judges & Security Auditors
 ### Target Artifact: `mosip_inji_conformance_lab.zip` (MOSIP Decode 2026 - Problem Statement 02)
 
+🌐 **Live Evaluation Portal:** [https://inji-conformance-lab.onrender.com](https://inji-conformance-lab.onrender.com) (Deployed & Active 24/7)
+
 ---
 
 ## 1. SUBMISSION OVERVIEW
