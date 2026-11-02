@@ -970,7 +970,7 @@ app.post('/direct_post', async (req, res) => {
       try {
         const rawProof = vcObj.proof.proofValue.startsWith('z') ? vcObj.proof.proofValue.slice(1) : vcObj.proof.proofValue;
         const sigBuffer = Buffer.from(rawProof, 'base64url');
-        const issuerBase = String(vcObj.issuer || 'http://localhost:8080').replace(/\/+$/, '');
+        const issuerBase = String(vcObj.issuer || process.env.ISSUER_URL || process.env.MOCK_CERTIFY_URL || 'http://localhost:8080').replace(/\/+$/, '');
         await resolveTrustedIssuerJwk(issuerBase);
         const cached = issuerJwksCache.get(issuerBase);
         const edKey = cached?.keys?.find(k => k.crv === 'Ed25519' || k.kty === 'OKP');
@@ -1098,7 +1098,26 @@ app.post('/direct_post', async (req, res) => {
     const msoBytes = (payloadTag24 && payloadTag24.value) ? payloadTag24.value : payloadTag24;
 
     try {
-      const trustedIssuerJwk = await resolveTrustedIssuerJwk('http://localhost:8080', 'mosip-issuer-key-2026');
+      let trustedIssuerJwk = null;
+      const issuerCandidates = [
+        process.env.ISSUER_URL,
+        process.env.MOCK_CERTIFY_URL,
+        'http://mock-certify:8080',
+        'http://localhost:8080'
+      ].filter(Boolean);
+
+      let lastErr = null;
+      for (const candidate of issuerCandidates) {
+        try {
+          trustedIssuerJwk = await resolveTrustedIssuerJwk(candidate, 'mosip-issuer-key-2026');
+          if (trustedIssuerJwk) break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (!trustedIssuerJwk) {
+        throw (lastErr || new Error('ERR_UNTRUSTED_ISSUER: Unable to resolve issuer JWK for mdoc'));
+      }
       const sigStructure = ['Signature1', protectedHeadersBytes, Buffer.alloc(0), msoBytes];
       const toBeSigned = cborEncode(sigStructure);
       const keyObj = crypto.createPublicKey({ key: trustedIssuerJwk, format: 'jwk' });
@@ -1239,7 +1258,7 @@ app.post('/direct_post', async (req, res) => {
       verification_result: 'SUCCESS',
       format: 'mso_mdoc',
       doctype: doc.docType,
-      issuer: 'http://localhost:8080',
+      issuer: process.env.ISSUER_URL || 'http://localhost:8080',
       claims: extractedClaims
     });
   }

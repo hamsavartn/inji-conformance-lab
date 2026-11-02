@@ -68,6 +68,8 @@ services:
     environment:
       - PORT=8081
       - VERIFIER_URL=http://mock-verify:8081
+      - ISSUER_URL=http://mock-certify:8080
+      - MOCK_CERTIFY_URL=http://mock-certify:8080
     command: node mocks/verifier/server.js
     ports:
       - "8081:8081"
