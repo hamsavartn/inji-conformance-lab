@@ -210,14 +210,22 @@ function sanitizeTelemetryPayload(data) {
 }
 
 function broadcastEvent(direction, endpoint, status, latencyMs, payload, hopName) {
+  // Normalize internal loopbacks to clean microservice names for clear architecture presentation
+  const displayEndpoint = typeof endpoint === 'string'
+    ? endpoint.replace(/http:\/\/localhost:8080/g, 'inji-certify:8080')
+              .replace(/http:\/\/localhost:8081/g, 'inji-verify:8081')
+              .replace(/http:\/\/mock-certify:8080/g, 'inji-certify:8080')
+              .replace(/http:\/\/mock-verify:8081/g, 'inji-verify:8081')
+    : endpoint;
+
   const event = {
     type: 'INTERCEPT_EVENT',
     timestamp: new Date().toISOString(),
     direction: direction, // INBOUND or OUTBOUND
-    endpoint: endpoint,
+    endpoint: displayEndpoint,
     status: status,
     latencyMs: Math.round(latencyMs),
-    hopName: hopName || endpoint,
+    hopName: hopName || displayEndpoint,
     payload: sanitizeTelemetryPayload(payload)
   };
 

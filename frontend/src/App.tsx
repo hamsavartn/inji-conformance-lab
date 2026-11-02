@@ -1246,7 +1246,9 @@ sequenceDiagram
                         {ev.direction}
                       </span>
                       <strong style={{ fontSize: '13px' }}>{ev.hopName}</strong>
-                      <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>{ev.endpoint}</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                        {ev.endpoint.replace(/http:\/\/localhost:8080/g, 'inji-certify:8080').replace(/http:\/\/localhost:8081/g, 'inji-verify:8081').replace(/http:\/\/mock-certify:8080/g, 'inji-certify:8080').replace(/http:\/\/mock-verify:8081/g, 'inji-verify:8081')}
+                      </span>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
